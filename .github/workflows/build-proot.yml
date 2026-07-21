@@ -1,0 +1,50 @@
+name: Build proot
+
+on:
+  push:
+    paths:
+      - 'packages/proot/**'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    runs-on: ubuntu-26.04
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v7
+
+    - name: Enable zram
+      uses: ./.github/actions/zram
+      with:
+        algorithm: zstd
+        size: 16G
+        priority: 100
+        device_name: /dev/zram0
+
+    - name: Free disk space
+      run: ./scripts/free-space.sh
+
+    - name: Build proot
+      run: |
+        ./scripts/run-docker.sh -d ./build-package.sh -I -a aarch64 proot
+
+    - name: Collect .deb files
+      if: always()
+      run: |
+        mkdir -p ./artifacts
+        test -d termux-packages/output && mv termux-packages/output/*.deb ./artifacts/ || true
+
+    - name: Store *.deb files
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: proot-aarch64-${{ github.sha }}
+        path: ./artifacts/*.deb
