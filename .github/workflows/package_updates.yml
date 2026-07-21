@@ -1,21 +1,6 @@
 name: Package updates
 
 on:
-  push:
-    branches:
-    - '**'
-    - '!master'
-    paths:
-    - 'packages/**'
-    - 'root-packages/**'
-    - 'x11-packages/**'
-  pull_request:
-    paths:
-    - 'packages/**'
-    - 'root-packages/**'
-    - 'x11-packages/**'
-  schedule:
-    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       packages:

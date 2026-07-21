@@ -32,6 +32,11 @@ jobs:
     - name: Free disk space
       run: ./scripts/free-space.sh
 
+    - name: Pull Docker builder image
+      run: |
+        docker system prune -af --volumes || true
+        docker pull ghcr.io/termux/package-builder:latest
+
     - name: Build proot
       run: |
         ./scripts/run-docker.sh -d ./build-package.sh -I -a aarch64 proot
