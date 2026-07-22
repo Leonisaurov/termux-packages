@@ -136,6 +136,7 @@
  #define PORT_THRESHOLD  1024
  #define PORT_ADDITION   2000
 +#define MAX_PORT_SEARCH 100
++#define SOCKETCALL_ARGS_SIZE (sizeof(long) * 6)
  
 -/** A function to modify the port number of the socket address sent to system calls by 1024. 
 - *  Uses tracee to modify the system call.
@@ -156,7 +157,8 @@
 +static uint16_t find_available_port(uint16_t start_port, int family);
 +static int find_mapping(PortSwitchConfig *config, uint16_t container_port);
 +static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
-+                            void *sockaddr, size_t sockaddr_size, long socketcall_arg2[]);
++                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2);
++static bool is_localhost(struct sockaddr_storage *my_sockaddr);
  
  int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t data1 UNUSED, intptr_t data2 UNUSED) {
      switch (event) {
@@ -670,15 +672,15 @@
 -        default:
 -            break; 
 +static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
-+                            void *sockaddr, size_t sockaddr_size, long socketcall_arg2[]) {
++                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2) {
 +    if (is_socketcall && is_udp) {
 +        write_data(tracee, socketcall_arg2[4], sockaddr, sockaddr_size);
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
 +    } else if (!is_socketcall && is_udp) {
 +        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), sockaddr, sockaddr_size);
 +    } else if (is_socketcall && !is_udp) {
 +        write_data(tracee, socketcall_arg2[1], sockaddr, sockaddr_size);
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
 +    } else if (!is_socketcall && !is_udp) {
 +        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), sockaddr, sockaddr_size);
      }
