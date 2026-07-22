@@ -32,10 +32,15 @@ jobs:
     - name: Free disk space
       run: ./scripts/free-space.sh
 
-    - name: Build Docker image
-      run: |
-        docker build -t ghcr.io/termux/package-builder:latest scripts/
-        docker buildx prune -af
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Build Docker builder image
+      uses: docker/build-push-action@v6
+      with:
+        context: scripts/
+        load: true
+        tags: ghcr.io/termux/package-builder:latest
 
     - name: Build proot
       run: |
