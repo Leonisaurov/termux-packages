@@ -1,5 +1,5 @@
---- a/src/extension/extension.h	2026-07-21 17:26:48.968727672 -0600
-+++ b/src/extension/extension.h	2026-07-21 17:26:57.660727673 -0600
+--- a/src/extension/extension.h	2026-07-21 19:16:13.544728063 -0600
++++ b/src/extension/extension.h	2026-07-21 19:17:01.764728066 -0600
 @@ -25,10 +25,23 @@
  
  #include <sys/queue.h> /* LIST_, */
@@ -24,8 +24,8 @@
  /* List of possible events.  */
  typedef enum {
  	/* A guest path passed as an argument of the current syscall
---- a/src/cli/proot.h	2026-07-21 17:27:08.000727673 -0600
-+++ b/src/cli/proot.h	2026-07-21 17:27:24.848727674 -0600
+--- a/src/cli/proot.h	2026-07-21 19:16:13.544728063 -0600
++++ b/src/cli/proot.h	2026-07-21 19:17:19.428728067 -0600
 @@ -69,6 +69,7 @@
  static int handle_option_L(Tracee *tracee, const Cli *cli, const char *value);
  static int handle_option_H(Tracee *tracee, const Cli *cli, const char *value);
@@ -62,8 +62,8 @@
          },
          { .class = "Extension options",
            .arguments = {
---- a/src/cli/proot.c	2026-07-21 17:27:33.040727675 -0600
-+++ b/src/cli/proot.c	2026-07-21 17:28:02.360727677 -0600
+--- a/src/cli/proot.c	2026-07-21 19:16:13.544728063 -0600
++++ b/src/cli/proot.c	2026-07-21 19:17:39.596728069 -0600
 @@ -331,9 +331,54 @@
          return 0;
  }
@@ -119,8 +119,8 @@
          return 0;
  }
  
---- a/src/extension/port_switch/port_switch.c	2026-07-21 17:28:14.576727677 -0600
-+++ b/src/extension/port_switch/port_switch.c	2026-07-21 17:29:01.288727680 -0600
+--- a/src/extension/port_switch/port_switch.c	2026-07-21 19:16:13.548728063 -0600
++++ b/src/extension/port_switch/port_switch.c	2026-07-21 19:18:55.764728073 -0600
 @@ -5,6 +5,9 @@
  #include <linux/net.h>
  #include <stdint.h>
@@ -131,7 +131,7 @@
  
  #include "extension/extension.h"
  #include "tracee/tracee.h"
-@@ -12,22 +15,13 @@
+@@ -12,22 +15,15 @@
  
  #define PORT_THRESHOLD  1024
  #define PORT_ADDITION   2000
@@ -162,7 +162,7 @@
  
  int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t data1 UNUSED, intptr_t data2 UNUSED) {
      switch (event) {
-@@ -38,61 +32,186 @@
+@@ -38,61 +34,186 @@
              { PR_socketcall, FILTER_SYSEXIT },
              { PR_sendto, FILTER_SYSEXIT },
              { PR_recvfrom, FILTER_SYSEXIT },
@@ -376,7 +376,7 @@
                  int call;
                  long a[6];
                  call = peek_reg(tracee, ORIGINAL, SYSARG_1);
-@@ -102,7 +221,52 @@
+@@ -102,7 +223,52 @@
                      case SYS_BIND: {
                          struct sockaddr_storage my_sockaddr;
                          read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
@@ -430,7 +430,7 @@
  
                          break;
                      }
-@@ -110,8 +274,51 @@
+@@ -110,8 +276,51 @@
                      case SYS_CONNECT: {
                          struct sockaddr_storage my_sockaddr;
                          read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
@@ -484,7 +484,7 @@
  
                          break;
                      }
-@@ -120,8 +327,51 @@
+@@ -120,8 +329,51 @@
                          struct sockaddr_storage my_sockaddr;
                          if(a[4] != 0) {
                              read_data(tracee, &my_sockaddr, a[4], sizeof(struct sockaddr_storage));
@@ -538,7 +538,7 @@
                          }
  
                          break;
-@@ -136,98 +386,75 @@
+@@ -136,98 +388,75 @@
              default:
                  return 0;
          }
@@ -694,7 +694,7 @@
      switch(my_sockaddr->ss_family) {
  
          case AF_INET: {
-@@ -239,7 +466,7 @@
+@@ -239,7 +468,7 @@
              else
                  return false;
          }
@@ -703,7 +703,7 @@
          case AF_INET6: {
              struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)my_sockaddr;
              char ipAddress[INET6_ADDRSTRLEN];
-@@ -250,7 +477,7 @@
+@@ -250,7 +479,7 @@
                  return false;
          }
  
