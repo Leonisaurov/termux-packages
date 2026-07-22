@@ -50,7 +50,7 @@ jobs:
       if: always()
       run: |
         mkdir -p ./artifacts
-        test -d termux-packages/output && mv termux-packages/output/*.deb ./artifacts/ || true
+        test -d output && mv output/*.deb ./artifacts/ || true
 
     - name: Store *.deb files
       if: always()
