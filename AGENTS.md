@@ -53,8 +53,9 @@ The source lives directly in `proot-source/` — no patches, no downloads.
 
 ### `build-proot.yml`
 - **Trigger**: Push to `packages/proot/**` or `proot-source/**`
-- **Steps**: Clone → zram → restore cache → build → collect → release → save cache → artifact
-- **Caching**: `~/.termux-build` keyed on build.sh hashes. Restore-key falls back to any prior cache.
+- **Steps**: Clone → zram → restore cache → prepare → build → collect → release → save cache → artifact
+- **Caching**: `~/.termux-build` mounted into Docker via `TERMUX_DOCKER_RUN_EXTRA_ARGS`
+- **Cache key**: hash of `packages/proot/build.sh`, `packages/libtalloc/build.sh`, `packages/libandroid-shmem/build.sh`
 - **Downloads**: `gh release download proot-latest -R Leonisaurov/termux-packages -p "*.pkg.tar.xz"`
 
 ### `docker_image.yml`
@@ -70,7 +71,7 @@ The source lives directly in `proot-source/` — no patches, no downloads.
 
 `<type>(<scope>): <summary>`
 
-Types: `fix`, `enhance`, `chore`, `ci`, `bump`
+Types: `fix`, `enhance`, `chore`, `ci`
 
 ## Important Paths
 
@@ -81,5 +82,19 @@ Types: `fix`, `enhance`, `chore`, `ci`, `bump`
 | `packages/proot/` | Proot definition |
 | `packages/libtalloc/` | Dependency |
 | `packages/libandroid-shmem/` | Dependency |
+| `packages/termux-keyring/` | GPG keys for -I dep install |
+| `packages/termux-licenses/` | License files (GPL-2.0, etc.) |
+| `packages/python/` | Python version (build variable) |
+| `packages/libllvm/` | LLVM version (build variable) |
+| `packages/termux-elf-cleaner/` | ELF cleaner version (build variable) |
+| `packages/libc++/` | C++ stdlib (dep of libllvm/elf-cleaner) |
 | `proot-source/src/` | Modified proot source (repo-tracked) |
 | `.github/workflows/build-proot.yml` | CI workflow |
+| `scripts/buildorder.py` | Dependency resolver (patched for proot-only) |
+| `repo.json` | Package directories list |
+
+## Known Issues
+
+- **`buildorder.py`**: Patched to skip missing deps when building a specific package (not full build). This is needed because some remaining packages (libllvm, python) declare dependencies on packages we removed.
+- **`/data` mount**: Not used in CI. `-m` flag in `run-docker.sh` mounts `/data` from host which causes permission issues on GHA runners. Cache is mounted via `TERMUX_DOCKER_RUN_EXTRA_ARGS`.
+- **First CI run**: ~5 min (seeds cache). Subsequent runs: ~20-30s with cache hit.
