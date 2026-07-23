@@ -15,7 +15,7 @@ jobs:
 
     - name: Build
       run: |
-        docker build --tag ghcr.io/${{ github.repository_owner }}/package-builder:latest scripts/
+        docker build --tag ghcr.io/${{ toLowerCase(github.repository_owner) }}/package-builder:latest scripts/
 
     - name: Login to GHCR
       uses: docker/login-action@v4
@@ -27,7 +27,7 @@ jobs:
     - name: Push to GHCR
       run: |
         for t in 1 2 3; do
-          if docker push ghcr.io/${{ github.repository_owner }}/package-builder:latest; then
+          if docker push ghcr.io/${{ toLowerCase(github.repository_owner) }}/package-builder:latest; then
             break
           else
             if [ "$t" = "3" ]; then
