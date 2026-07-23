@@ -1,14 +1,12 @@
-# Contributor: @michalbednarski
+# Source is maintained directly in proot-source/ (no patches)
+# To modify: edit files in proot-source/src/, then bump TERMUX_PKG_REVISION
 TERMUX_PKG_HOMEPAGE=https://proot-me.github.io/
 TERMUX_PKG_DESCRIPTION="Emulate chroot, bind mount and binfmt_misc for non-root users"
 TERMUX_PKG_LICENSE="GPL-2.0"
-TERMUX_PKG_MAINTAINER="Michal Bednarski @michalbednarski"
+TERMUX_PKG_MAINTAINER="@leonisaurov"
 TERMUX_PKG_VERSION="5.1.107.86"
 TERMUX_PKG_REVISION=2
-TERMUX_PKG_SRCURL=https://github.com/termux/proot/archive/v${TERMUX_PKG_VERSION}.zip
-TERMUX_PKG_SHA256=692da7f952ac390eb65c4117d360cad23a052525eea4eb110ae42f8a4a7d7bb8
-TERMUX_PKG_AUTO_UPDATE=true
-TERMUX_PKG_UPDATE_TAG_TYPE="newest-tag"
+TERMUX_PKG_SKIP_SRC_EXTRACT=true
 TERMUX_PKG_DEPENDS="libandroid-shmem, libtalloc"
 TERMUX_PKG_SUGGESTS="proot-distro"
 TERMUX_PKG_BUILD_IN_SRC=true
@@ -18,6 +16,9 @@ TERMUX_PKG_EXTRA_MAKE_ARGS="-C src PROOT_WITH_LIBANDROID_SHMEM=true"
 export PROOT_UNBUNDLE_LOADER=$TERMUX_PREFIX/libexec/proot
 
 termux_step_pre_configure() {
+	if [ -d "$TERMUX_PKG_BUILDER_DIR/../../proot-source" ]; then
+		rsync -a --exclude=.git "$TERMUX_PKG_BUILDER_DIR/../../proot-source/" "$TERMUX_PKG_SRCDIR/"
+	fi
 	CPPFLAGS+=" -DARG_MAX=131072 -DVERSION=\\\"${TERMUX_PKG_VERSION}\\\""
 }
 

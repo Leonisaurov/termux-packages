@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'packages/proot/**'
+      - 'proot-source/**'
   workflow_dispatch:
 
 permissions:
@@ -28,22 +29,8 @@ jobs:
         priority: 100
         device_name: /dev/zram0
 
-    - name: Check if patch changed
-      id: check-patch
-      run: |
-        if git diff HEAD~1 --name-only | grep -q "packages/proot/001-port-mapping.patch"; then
-          echo "patch_changed=true" >> $GITHUB_OUTPUT
-        else
-          echo "patch_changed=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Build proot (full rebuild)
-      if: steps.check-patch.outputs.patch_changed == 'true'
+    - name: Build proot
       run: ./scripts/run-docker.sh ./build-package.sh -I -a aarch64 --format pacman proot
-
-    - name: Build proot (incremental)
-      if: steps.check-patch.outputs.patch_changed == 'false'
-      run: ./scripts/run-docker.sh ./build-package.sh -I -c -a aarch64 --format pacman proot
 
     - name: Collect package files
       if: always()
