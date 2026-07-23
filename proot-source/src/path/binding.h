@@ -35,6 +35,11 @@ typedef enum {
 	BINDING_ACCESS_WO,
 } BindingAccess;
 
+typedef enum {
+	BINDING_TYPE_REGULAR = 0,
+	BINDING_TYPE_MBIND,
+} BindingType;
+
 typedef struct binding {
 	Path host;
 	Path guest;
@@ -42,6 +47,7 @@ typedef struct binding {
 	bool need_substitution;
 	bool must_exist;
 	BindingAccess access_mode;
+	BindingType type;
 
 	struct {
 		CIRCLEQ_ENTRY(binding) pending;
@@ -54,7 +60,7 @@ typedef CIRCLEQ_HEAD(bindings, binding) Bindings;
 
 extern Binding *insort_binding3(const Tracee *tracee, const TALLOC_CTX *context,
 				const char host_path[PATH_MAX], const char guest_path[PATH_MAX]);
-extern Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist, BindingAccess access_mode);
+extern Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist, BindingAccess access_mode, BindingType type);
 extern int initialize_bindings(Tracee *tracee);
 extern const char *get_path_binding(const Tracee* tracee, Side side, const char path[PATH_MAX]);
 extern Binding *get_binding(const Tracee *tracee, Side side, const char path[PATH_MAX]);

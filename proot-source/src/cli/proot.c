@@ -42,7 +42,7 @@ static int handle_option_r(Tracee *tracee, const Cli *cli UNUSED, const char *va
 
 	/* ``chroot $PATH`` is semantically equivalent to ``mount
 	 * --bind $PATH /``.  */
-	binding = new_binding(tracee, value, "/", true, BINDING_ACCESS_RW);
+	binding = new_binding(tracee, value, "/", true, BINDING_ACCESS_RW, BINDING_TYPE_REGULAR);
 	if (binding == NULL)
 		return -1;
 
@@ -81,7 +81,34 @@ static int handle_option_b(Tracee *tracee, const Cli *cli UNUSED, const char *va
 		}
 	}
 
-	new_binding(tracee, host, guest, true, access_mode);
+	new_binding(tracee, host, guest, true, access_mode, BINDING_TYPE_REGULAR);
+	return 0;
+}
+
+static int handle_option_mbind(Tracee *tracee, const Cli *cli UNUSED, const char *value)
+{
+	char *host;
+	char *guest;
+
+	host = talloc_strdup(tracee->ctx, value);
+	if (host == NULL) {
+		note(tracee, ERROR, INTERNAL, "can't allocate memory");
+		return -1;
+	}
+
+	guest = strchr(host, ':');
+	if (guest != NULL) {
+		*guest = '\0';
+		guest++;
+	}
+
+	if (guest == NULL || guest[0] == '\0') {
+		note(tracee, ERROR, USER,
+			"--mbind requires host:guest format, e.g. --mbind /real/run:/run");
+		return -1;
+	}
+
+	new_binding(tracee, host, guest, true, BINDING_ACCESS_RW, BINDING_TYPE_MBIND);
 	return 0;
 }
 
@@ -153,8 +180,8 @@ static int handle_option_q(Tracee *tracee, const Cli *cli UNUSED, const char *va
 	} while (!last);
 	assert(i == nb_args);
 
-	new_binding(tracee, "/", HOST_ROOTFS, true, BINDING_ACCESS_RW);
-	new_binding(tracee, "/dev/null", "/etc/ld.so.preload", false, BINDING_ACCESS_RW);
+	new_binding(tracee, "/", HOST_ROOTFS, true, BINDING_ACCESS_RW, BINDING_TYPE_REGULAR);
+	new_binding(tracee, "/dev/null", "/etc/ld.so.preload", false, BINDING_ACCESS_RW, BINDING_TYPE_REGULAR);
 
 	return 0;
 }
@@ -262,8 +289,7 @@ static void new_bindings(Tracee *tracee, const char *bindings[], const char *val
 			? expand_front_variable(tracee->ctx, bindings[i])
 			: value);
 
-		new_binding(tracee, path, NULL, false, BINDING_ACCESS_RW);
-	}
+		new_binding(tracee, path, NULL, false, BINDING_ACCESS_RW, BINDING_TYPE_REGULAR);
 }
 
 static int handle_option_R(Tracee *tracee, const Cli *cli, const char *value)

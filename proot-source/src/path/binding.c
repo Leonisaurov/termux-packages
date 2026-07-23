@@ -27,6 +27,8 @@
 #include <assert.h>   /* assert(3), */
 #include <limits.h>   /* PATH_MAX, */
 #include <errno.h>    /* E* */
+#include <fcntl.h>    /* open(2), */
+#include <dirent.h>   /* opendir(3), readdir(3), */
 #include <sys/queue.h> /* CIRCLEQ_*, */
 #include <talloc.h>   /* talloc_*, */
 
@@ -455,12 +457,154 @@ static int remove_bindings(Bindings *bindings)
 }
 
 /**
+ * Recursively copy a directory tree from @src to @dst.
+ * Returns 0 on success, -errno on error.
+ */
+static int copy_recursive(const char *src, const char *dst)
+{
+	struct stat statl;
+	DIR *dir;
+	struct dirent *entry;
+	int status;
+
+	status = stat(src, &statl);
+	if (status < 0)
+		return -errno;
+
+	if (S_ISDIR(statl.st_mode)) {
+		status = mkdir(dst, statl.st_mode & 0777);
+		if (status < 0 && errno != EEXIST)
+			return -errno;
+
+		dir = opendir(src);
+		if (dir == NULL)
+			return -errno;
+
+		while ((entry = readdir(dir)) != NULL) {
+			char src_path[PATH_MAX];
+			char dst_path[PATH_MAX];
+
+			if (strcmp(entry->d_name, ".") == 0
+			    || strcmp(entry->d_name, "..") == 0)
+				continue;
+
+			status = join_paths(2, src_path, src, entry->d_name);
+			if (status < 0) { closedir(dir); return status; }
+
+			status = join_paths(2, dst_path, dst, entry->d_name);
+			if (status < 0) { closedir(dir); return status; }
+
+			status = copy_recursive(src_path, dst_path);
+			if (status < 0) { closedir(dir); return status; }
+		}
+		closedir(dir);
+	}
+	else if (S_ISLNK(statl.st_mode)) {
+		char target[PATH_MAX];
+		ssize_t len;
+
+		len = readlink(src, target, sizeof(target) - 1);
+		if (len < 0)
+			return -errno;
+		target[len] = '\0';
+
+		if (symlink(target, dst) < 0)
+			return -errno;
+	}
+	else if (S_ISREG(statl.st_mode)) {
+		int src_fd, dst_fd;
+		ssize_t nread;
+		char buf[8192];
+
+		src_fd = open(src, O_RDONLY);
+		if (src_fd < 0)
+			return -errno;
+
+		dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, statl.st_mode & 0777);
+		if (dst_fd < 0) {
+			close(src_fd);
+			return -errno;
+		}
+
+		while ((nread = read(src_fd, buf, sizeof(buf))) > 0) {
+			ssize_t nwritten = write(dst_fd, buf, nread);
+			if (nwritten != nread) {
+				close(src_fd);
+				close(dst_fd);
+				return -errno;
+			}
+		}
+
+		close(src_fd);
+		close(dst_fd);
+	}
+
+	return 0;
+}
+
+/**
+ * For MBIND type bindings: copy the guest's original directory contents
+ * to the host path before the binding is created.  This ensures files
+ * that already exist in the guest's directory are still visible after
+ * the bind replaces it.
+ *
+ * Returns 0 on success, -errno on error.
+ */
+static int mbind_prepare(Tracee *tracee, const char *host, const char *guest)
+{
+	const char *root;
+	char src[PATH_MAX];
+	struct stat statl;
+	int status;
+
+	root = get_root(tracee);
+	if (root == NULL)
+		return -EINVAL;
+
+	status = join_paths(2, src, root, guest);
+	if (status < 0)
+		return status;
+
+	/* If the guest path doesn't exist in rootfs, nothing to copy. */
+	status = lstat(src, &statl);
+	if (status < 0)
+		return 0;
+
+	if (!S_ISDIR(statl.st_mode))
+		return -ENOTDIR;
+
+	/* If the host path already has contents, abort. */
+	status = lstat(host, &statl);
+	if (status == 0) {
+		DIR *dir = opendir(host);
+		if (dir != NULL) {
+			struct dirent *entry;
+			while ((entry = readdir(dir)) != NULL) {
+				if (strcmp(entry->d_name, ".") != 0
+				    && strcmp(entry->d_name, "..") != 0) {
+					closedir(dir);
+					return -EEXIST;
+				}
+			}
+			closedir(dir);
+		}
+	}
+
+	status = copy_recursive(src, host);
+	if (status < 0)
+		return status;
+
+	VERBOSE(tracee, 1, "mbind: copied '%s' to '%s'", src, host);
+	return 0;
+}
+
+/**
  * Allocate a new binding "@host:@guest" and attach it to
  * @tracee->fs->bindings.pending.  This function complains about
  * missing @host path only if @must_exist is true.  This function
  * returns the allocated binding on success, NULL on error.
  */
-Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist, BindingAccess access_mode)
+Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist, BindingAccess access_mode, BindingType type)
 {
 	Binding *binding;
 	char base[PATH_MAX];
@@ -482,7 +626,7 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 		return NULL;
 
 	binding->access_mode = access_mode;
-
+	binding->type = type;
 	/* Canonicalize the host part of the binding, as expected by
 	 * get_binding().  /proc/self/... paths are special: "self" must
 	 * be resolved by the kernel at syscall time relative to the
@@ -534,6 +678,17 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 		goto error;
 	}
 	binding->guest.length = strlen(binding->guest.path);
+
+	/* For MBIND type, copy the original rootfs contents to the
+	 * host path before creating the binding.  */
+	if (type == BINDING_TYPE_MBIND) {
+		status = mbind_prepare(tracee, binding->host.path, binding->guest.path);
+		if (status < 0) {
+			note(tracee, ERROR, SYSTEM, "mbind: can't prepare '%s': %s",
+				binding->host.path, strerror(-status));
+			goto error;
+		}
+	}
 
 	/* Keep the list of bindings specified by the user ordered,
 	 * for the sake of consistency.  For instance binding to "/"

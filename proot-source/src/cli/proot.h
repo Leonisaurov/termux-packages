@@ -70,6 +70,7 @@ static int handle_option_L(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_H(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_p(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_port_mapping(Tracee *tracee, const Cli *cli, const char *value);
+static int handle_option_mbind(Tracee *tracee, const Cli *cli, const char *value);
 
 static int pre_initialize_bindings(Tracee *, const Cli *, size_t, char *const *, size_t);
 static int post_initialize_exe(Tracee *, const Cli *, size_t, char *const *, size_t);
@@ -126,6 +127,22 @@ Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
 \tbehavior shouldn't be a problem, although it is possible to\n\
 \texplicitly not dereference the guest location by appending it the\n\
 \t! character: -b *host_path*:*guest_location!*.",
+	},
+	{ .class = "Regular options",
+	  .arguments = {
+		{ .name = "--mbind", .separator = ' ', .value = "host:guest" },
+		{ .name = NULL, .separator = '\0', .value = NULL } },
+	  .handler = handle_option_mbind,
+	  .description = "Copy rootfs directory to host then bind (files survive the bind).",
+	  .detail = "\tThis option copies the content of *guest* from within the\n\
+\tguest rootfs to *host* before creating the bind mount.  This\n\
+\tway, files that already exist in the guest directory remain\n\
+\tvisible and accessible after the bind.  Useful for sharing\n\
+\tdirectories like /run between multiple proot instances.\n\
+\t\n\
+\tSyntax: --mbind *host_path*:*guest_path*\n\
+\tIf *host_path* already contains files, the operation aborts\n\
+\twith EEXIST to prevent accidental overwrites.",
 	},
 	{ .class = "Regular options",
 	  .arguments = {
