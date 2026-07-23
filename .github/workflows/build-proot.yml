@@ -29,8 +29,17 @@ jobs:
         priority: 100
         device_name: /dev/zram0
 
+    - name: Restore build cache
+      uses: actions/cache@v4
+      id: build-cache
+      with:
+        path: ~/.termux-build
+        key: proot-${{ hashFiles('packages/proot/build.sh', 'packages/libtalloc/build.sh', 'packages/libandroid-shmem/build.sh') }}
+        restore-keys: |
+          proot-
+
     - name: Build proot
-      run: ./scripts/run-docker.sh ./build-package.sh -I -a aarch64 --format pacman proot
+      run: ./scripts/run-docker.sh -m ./build-package.sh -I -a aarch64 --format pacman proot
 
     - name: Collect package files
       if: always()
