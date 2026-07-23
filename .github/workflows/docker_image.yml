@@ -13,6 +13,9 @@ jobs:
     - name: Clone repository
       uses: actions/checkout@v7
 
+    - name: Set lowercase owner
+      run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
@@ -21,7 +24,7 @@ jobs:
       with:
         context: scripts/
         load: true
-        tags: ghcr.io/${{ toLowerCase(github.repository_owner) }}/package-builder:latest
+        tags: ghcr.io/${{ env.OWNER }}/package-builder:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -35,7 +38,7 @@ jobs:
     - name: Push to GHCR
       run: |
         for t in 1 2 3; do
-          if docker push ghcr.io/${{ toLowerCase(github.repository_owner) }}/package-builder:latest; then
+          if docker push ghcr.io/${{ env.OWNER }}/package-builder:latest; then
             break
           else
             if [ "$t" = "3" ]; then
