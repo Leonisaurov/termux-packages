@@ -137,7 +137,7 @@ index e66fe48..61350cb 100644
  typedef enum {
  	/* A guest path passed as an argument of the current syscall
 diff --git a/src/extension/port_switch/port_switch.c b/src/extension/port_switch/port_switch.c
-index abcbd15..24568ac 100644
+index abcbd15..17799aa 100644
 --- a/src/extension/port_switch/port_switch.c
 +++ b/src/extension/port_switch/port_switch.c
 @@ -5,6 +5,7 @@
@@ -148,7 +148,7 @@ index abcbd15..24568ac 100644
  
  #include "extension/extension.h"
  #include "tracee/tracee.h"
-@@ -12,22 +13,18 @@
+@@ -12,22 +13,19 @@
  
  #define PORT_THRESHOLD  1024
  #define PORT_ADDITION   2000
@@ -177,12 +177,13 @@ index abcbd15..24568ac 100644
 +static int find_mapping(PortSwitchConfig *config, uint16_t container_port);
 +static uint16_t resolve_port(PortSwitchConfig *config, uint16_t original_port, int family);
 +static bool is_localhost(struct sockaddr_storage *my_sockaddr);
++static size_t get_sockaddr_len(struct sockaddr_storage *addr);
 +static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
-+                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2);
++                            struct sockaddr_storage *sockaddr, long *socketcall_arg2);
  
  int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t data1 UNUSED, intptr_t data2 UNUSED) {
      switch (event) {
-@@ -38,90 +35,133 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
+@@ -38,90 +36,133 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              { PR_socketcall, FILTER_SYSEXIT },
              { PR_sendto, FILTER_SYSEXIT },
              { PR_recvfrom, FILTER_SYSEXIT },
@@ -230,7 +231,7 @@ index abcbd15..24568ac 100644
 +
 +                if (new_port != 0 && new_port != original_port) {
 +                    set_port(&my_sockaddr, new_port);
-+                    write_back_port(tracee, false, false, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                    write_back_port(tracee, false, false, &my_sockaddr, NULL);
 +                }
                  return 0;
              }
@@ -250,7 +251,7 @@ index abcbd15..24568ac 100644
 +
 +                    if (new_port != 0 && new_port != original_port) {
 +                        set_port(&my_sockaddr, new_port);
-+                        write_back_port(tracee, false, false, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                        write_back_port(tracee, false, false, &my_sockaddr, NULL);
 +                    }
 +                }
                  return 0;
@@ -277,7 +278,7 @@ index abcbd15..24568ac 100644
 +
 +                        if (new_port != 0 && new_port != original_port) {
 +                            set_port(&my_sockaddr, new_port);
-+                            write_back_port(tracee, false, true, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                            write_back_port(tracee, false, true, &my_sockaddr, NULL);
 +                        }
 +                    }
                  }
@@ -310,7 +311,7 @@ index abcbd15..24568ac 100644
 +
 +                        if (new_port != 0 && new_port != original_port) {
 +                            set_port(&my_sockaddr, new_port);
-+                            write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
++                            write_back_port(tracee, true, false, &my_sockaddr, a);
 +                        }
                          break;
                      }
@@ -329,7 +330,7 @@ index abcbd15..24568ac 100644
 +
 +                            if (new_port != 0 && new_port != original_port) {
 +                                set_port(&my_sockaddr, new_port);
-+                                write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
++                                write_back_port(tracee, true, false, &my_sockaddr, a);
 +                            }
 +                        }
  
@@ -352,13 +353,13 @@ index abcbd15..24568ac 100644
 +
 +                                if (new_port != 0 && new_port != original_port) {
 +                                    set_port(&my_sockaddr, new_port);
-+                                    write_back_port(tracee, true, true, &my_sockaddr, sizeof(my_sockaddr), a);
++                                    write_back_port(tracee, true, true, &my_sockaddr, a);
 +                                }
 +                            }
                          }
  
                          break;
-@@ -136,121 +176,126 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
+@@ -136,121 +177,136 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              default:
                  return 0;
          }
@@ -527,10 +528,10 @@ index abcbd15..24568ac 100644
 +        uint16_t result = find_available_port(target, family);
 +        return result ? result : 0;
 +    }
- 
++
 +    return 0;
 +}
-+
+ 
 +static bool is_localhost(struct sockaddr_storage *my_sockaddr) {
 +    switch(my_sockaddr->ss_family) {
          case AF_INET: {
@@ -563,17 +564,27 @@ index abcbd15..24568ac 100644
      }
  }
 +
++static size_t get_sockaddr_len(struct sockaddr_storage *addr) {
++    if (addr->ss_family == AF_INET)
++        return sizeof(struct sockaddr_in);
++    else if (addr->ss_family == AF_INET6)
++        return sizeof(struct sockaddr_in6);
++    return sizeof(struct sockaddr_storage);
++}
++
 +static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
-+                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2) {
++                            struct sockaddr_storage *sockaddr, long *socketcall_arg2) {
++    size_t len = get_sockaddr_len(sockaddr);
++
 +    if (is_socketcall && is_udp) {
-+        write_data(tracee, socketcall_arg2[4], sockaddr, sockaddr_size);
++        write_data(tracee, socketcall_arg2[4], sockaddr, len);
 +        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
 +    } else if (!is_socketcall && is_udp) {
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), sockaddr, sockaddr_size);
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), sockaddr, len);
 +    } else if (is_socketcall && !is_udp) {
-+        write_data(tracee, socketcall_arg2[1], sockaddr, sockaddr_size);
++        write_data(tracee, socketcall_arg2[1], sockaddr, len);
 +        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
 +    } else {
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), sockaddr, sockaddr_size);
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), sockaddr, len);
 +    }
 +}
