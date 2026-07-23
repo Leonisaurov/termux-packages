@@ -264,6 +264,8 @@ def read_packages_from_directories(directories, fast_build_mode, full_buildmode)
     for pkg in all_packages:
         for dependency_name in pkg.deps:
             if dependency_name not in pkgs_map:
+                if not full_buildorder:
+                    continue
                 die('Package %s depends on non-existing package "%s"' % (pkg.name, dependency_name))
             dep_pkg = pkgs_map[dependency_name]
             if fast_build_mode or not isinstance(pkg, TermuxSubPackage):
