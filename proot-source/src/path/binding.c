@@ -494,6 +494,9 @@ static int copy_recursive(const char *src, const char *dst)
 			status = join_paths(2, dst_path, dst, entry->d_name);
 			if (status < 0) { closedir(dir); return status; }
 
+			if (access(dst_path, F_OK) == 0)
+				return -EEXIST;
+
 			status = copy_recursive(src_path, dst_path);
 			if (status < 0) { closedir(dir); return status; }
 		}
@@ -502,6 +505,9 @@ static int copy_recursive(const char *src, const char *dst)
 	else if (S_ISLNK(statl.st_mode)) {
 		char target[PATH_MAX];
 		ssize_t len;
+
+		if (access(dst, F_OK) == 0)
+			return -EEXIST;
 
 		len = readlink(src, target, sizeof(target) - 1);
 		if (len < 0)
@@ -516,11 +522,14 @@ static int copy_recursive(const char *src, const char *dst)
 		ssize_t nread;
 		char buf[8192];
 
+		if (access(dst, F_OK) == 0)
+			return -EEXIST;
+
 		src_fd = open(src, O_RDONLY);
 		if (src_fd < 0)
 			return -errno;
 
-		dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, statl.st_mode & 0777);
+		dst_fd = open(dst, O_WRONLY | O_CREAT | O_EXCL, statl.st_mode & 0777);
 		if (dst_fd < 0) {
 			close(src_fd);
 			return -errno;
@@ -572,23 +581,6 @@ static int mbind_prepare(Tracee *tracee, const char *host, const char *guest)
 
 	if (!S_ISDIR(statl.st_mode))
 		return -ENOTDIR;
-
-	/* If the host path already has contents, abort. */
-	status = lstat(host, &statl);
-	if (status == 0) {
-		DIR *dir = opendir(host);
-		if (dir != NULL) {
-			struct dirent *entry;
-			while ((entry = readdir(dir)) != NULL) {
-				if (strcmp(entry->d_name, ".") != 0
-				    && strcmp(entry->d_name, "..") != 0) {
-					closedir(dir);
-					return -EEXIST;
-				}
-			}
-			closedir(dir);
-		}
-	}
 
 	status = copy_recursive(src, host);
 	if (status < 0)
