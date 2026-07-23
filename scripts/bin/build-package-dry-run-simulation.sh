@@ -10,8 +10,6 @@ TERMUX_ARCH="aarch64"
 TERMUX_DEBUG_BUILD="false"
 TERMUX_PACKAGES_DIRECTORIES="
 packages
-root-packages
-x11-packages
 "
 
 # Please keep synchronized with the logic of lines 468-547 of 'build-package.sh'.
