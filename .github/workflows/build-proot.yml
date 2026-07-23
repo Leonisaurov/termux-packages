@@ -35,17 +35,7 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
-    - name: Pull pre-built Docker image
-      id: pull
-      run: |
-        if docker pull ghcr.io/termux/package-builder:latest; then
-          echo "outcome=success" >> "$GITHUB_OUTPUT"
-        else
-          echo "outcome=failure" >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Build Docker builder image
-      if: steps.pull.outputs.outcome == 'failure'
       uses: docker/build-push-action@v6
       with:
         context: scripts/
@@ -56,17 +46,18 @@ jobs:
 
     - name: Build proot
       run: |
-        ./scripts/run-docker.sh -d ./build-package.sh -I -a aarch64 proot
+        ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 --format pacman proot
 
-    - name: Collect .deb files
+    - name: Collect package files
       if: always()
       run: |
         mkdir -p ./artifacts
-        test -d output && mv output/*.deb ./artifacts/ || true
+        test -d output && mv output/*.pkg.tar.xz ./artifacts/ 2>/dev/null || true
+        test -d output && mv output/*.deb ./artifacts/ 2>/dev/null || true
 
-    - name: Store *.deb files
+    - name: Store package files
       if: always()
       uses: actions/upload-artifact@v6
       with:
         name: proot-aarch64-${{ github.sha }}
-        path: ./artifacts/*.deb
+        path: ./artifacts/*
