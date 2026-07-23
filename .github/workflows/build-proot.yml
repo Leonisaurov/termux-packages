@@ -31,11 +31,8 @@ jobs:
     - name: Free disk space
       run: ./scripts/free-space.sh
 
-    - name: Clean corrupted Docker images
-      run: |
-        docker rm -f termux-package-builder 2>/dev/null || true
-        docker rmi ghcr.io/termux/package-builder:latest 2>/dev/null || true
-        docker image prune -f 2>/dev/null || true
+    - name: Pull Docker image
+      run: docker pull ghcr.io/termux/package-builder:latest
 
     - name: Build proot
       run: ./scripts/run-docker.sh ./build-package.sh -I -a aarch64 --format pacman proot
