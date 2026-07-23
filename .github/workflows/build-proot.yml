@@ -35,12 +35,24 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
+    - name: Pull pre-built Docker image
+      id: pull
+      run: |
+        if docker pull ghcr.io/termux/package-builder:latest; then
+          echo "outcome=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "outcome=failure" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Build Docker builder image
+      if: steps.pull.outputs.outcome == 'failure'
       uses: docker/build-push-action@v6
       with:
         context: scripts/
         load: true
         tags: ghcr.io/termux/package-builder:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: Build proot
       run: |
