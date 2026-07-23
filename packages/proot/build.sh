@@ -17,7 +17,7 @@ export PROOT_UNBUNDLE_LOADER=$TERMUX_PREFIX/libexec/proot
 
 termux_step_pre_configure() {
 	if [ -d "$TERMUX_PKG_BUILDER_DIR/../../proot-source" ]; then
-		rsync -a --exclude=.git "$TERMUX_PKG_BUILDER_DIR/../../proot-source/" "$TERMUX_PKG_SRCDIR/"
+		rsync -ac --exclude=.git "$TERMUX_PKG_BUILDER_DIR/../../proot-source/" "$TERMUX_PKG_SRCDIR/"
 	fi
 	CPPFLAGS+=" -DARG_MAX=131072 -DVERSION=\\\"${TERMUX_PKG_VERSION}\\\""
 }
