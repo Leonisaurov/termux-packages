@@ -35,24 +35,21 @@ jobs:
       if: always()
       run: |
         mkdir -p ./artifacts
-        test -d output && mv output/*.pkg.tar.xz ./artifacts/ 2>/dev/null || true
-        test -d output && mv output/*.deb ./artifacts/ 2>/dev/null || true
+        mv output/*.pkg.tar.xz ./artifacts/ 2>/dev/null || true
 
     - name: Upload to GitHub Release
       if: always()
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        for f in ./artifacts/*.pkg.tar.xz ./artifacts/*.deb; do
-          [ -f "$f" ] || continue
-          gh release delete proot-latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create proot-latest "$f" \
-            --repo "${{ github.repository }}" \
-            --title "proot-latest" \
-            --latest \
-            --notes "Latest proot build from ${{ github.sha }}"
-          break
-        done
+        FILE=$(ls ./artifacts/*.pkg.tar.xz 2>/dev/null | head -1)
+        [ -f "$FILE" ] || exit 0
+        gh release delete proot-latest --yes --cleanup-tag 2>/dev/null || true
+        gh release create proot-latest "$FILE" \
+          --repo "${{ github.repository }}" \
+          --title "proot-latest" \
+          --latest \
+          --notes "proot aarch64 from ${{ github.sha }}"
 
     - name: Store package files
       if: always()
