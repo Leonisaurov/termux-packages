@@ -16,6 +16,7 @@ jobs:
   build:
     permissions:
       contents: read
+      packages: write
     runs-on: ubuntu-26.04
     steps:
     - name: Clone repository
@@ -32,17 +33,51 @@ jobs:
     - name: Free disk space
       run: ./scripts/free-space.sh
 
+    - name: Login to GHCR
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Pull pre-built Docker image
+      id: pull
+      run: |
+        if docker pull ghcr.io/${{ github.repository_owner }}/package-builder:latest; then
+          echo "outcome=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "outcome=failure" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Set up Docker Buildx
+      if: steps.pull.outputs.outcome == 'failure'
       uses: docker/setup-buildx-action@v4
 
     - name: Build Docker builder image
+      if: steps.pull.outputs.outcome == 'failure'
+      id: build-image
       uses: docker/build-push-action@v6
       with:
         context: scripts/
         load: true
-        tags: ghcr.io/termux/package-builder:latest
+        tags: ghcr.io/${{ github.repository_owner }}/package-builder:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Push Docker image to GHCR
+      if: steps.pull.outputs.outcome == 'failure'
+      run: |
+        for t in 1 2 3; do
+          if docker push ghcr.io/${{ github.repository_owner }}/package-builder:latest; then
+            break
+          else
+            if [ "$t" = "3" ]; then
+              echo "::warning::Failed to push Docker image to GHCR after 3 attempts"
+              exit 0
+            fi
+            sleep 20
+          fi
+        done
 
     - name: Build proot
       run: |
