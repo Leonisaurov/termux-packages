@@ -137,7 +137,7 @@ index e66fe48..61350cb 100644
  typedef enum {
  	/* A guest path passed as an argument of the current syscall
 diff --git a/src/extension/port_switch/port_switch.c b/src/extension/port_switch/port_switch.c
-index abcbd15..17799aa 100644
+index abcbd15..b21b6a2 100644
 --- a/src/extension/port_switch/port_switch.c
 +++ b/src/extension/port_switch/port_switch.c
 @@ -5,6 +5,7 @@
@@ -359,7 +359,7 @@ index abcbd15..17799aa 100644
                          }
  
                          break;
-@@ -136,121 +177,136 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
+@@ -136,121 +177,130 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              default:
                  return 0;
          }
@@ -427,24 +427,15 @@ index abcbd15..17799aa 100644
 -                    write_data(tracee, socketcall_arg2[1], in, sizeof(in));
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
 -                }
-+    struct sockaddr_storage addr;
-+    memset(&addr, 0, sizeof(addr));
-+    addr.ss_family = family;
++    int opt = 1;
++    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
  
 -                else if(!is_socketcall && !is_udp)
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), in, sizeof(in));
 -            }
 -            break;
 -        }
-+    if (family == AF_INET) {
-+        struct sockaddr_in *in = (struct sockaddr_in *)&addr;
-+        in->sin_port = htons(port);
-+        in->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-+    } else if (family == AF_INET6) {
-+        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&addr;
-+        in6->sin6_port = htons(port);
-+        in6->sin6_addr = in6addr_loopback;
-+    }
++    bool available = false;
  
 -        case AF_INET6: {
 -            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)my_sockaddr;
@@ -461,23 +452,39 @@ index abcbd15..17799aa 100644
 -                    write_data(tracee, socketcall_arg2[4], in6, sizeof(in6));
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
 -                }
-+    socklen_t addr_len = (family == AF_INET)
-+        ? sizeof(struct sockaddr_in)
-+        : sizeof(struct sockaddr_in6);
++    if (family == AF_INET) {
++        struct sockaddr_in addr;
++        memset(&addr, 0, sizeof(addr));
++        addr.sin_family = AF_INET;
++        addr.sin_port = htons(port);
++        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++        available = (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
++    } else if (family == AF_INET6) {
++        struct sockaddr_in6 addr;
++        memset(&addr, 0, sizeof(addr));
++        addr.sin6_family = AF_INET6;
++        addr.sin6_port = htons(port);
++        addr.sin6_addr = in6addr_loopback;
++        available = (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
++    }
  
 -                else if(is_socketcall && is_udp)
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), in6, sizeof(in6));
-+    bool available = false;
-+    if (bind(sock, (struct sockaddr *)&addr, addr_len) == 0) {
-+        available = (listen(sock, 1) == 0);
-+    }
++    close(sock);
++    return available;
++}
  
 -                else if(is_socketcall && !is_udp) { 
 -                    write_data(tracee, socketcall_arg2[1], in6, sizeof(in6));
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
 -                }
-+    close(sock);
-+    return available;
++static uint16_t find_available_port(uint16_t start_port, int family) {
++    for (uint16_t i = 0; i < MAX_PORT_SEARCH; i++) {
++        uint16_t port = start_port + i;
++        if (is_port_available(port, family))
++            return port;
++    }
++    return start_port;
 +}
  
 -                else if(!is_socketcall && !is_udp)
@@ -485,33 +492,16 @@ index abcbd15..17799aa 100644
 -            }
 -            break;
 -        }
-+static uint16_t find_available_port(uint16_t start_port, int family) {
-+    for (uint16_t i = 0; i < MAX_PORT_SEARCH; i++) {
-+        uint16_t port = start_port + i;
-+        if (port == 0)
-+            continue;
-+        if (is_port_available(port, family))
-+            return port;
-+    }
-+    return 0;
-+}
- 
--        default:
--            break; 
 +static int find_mapping(PortSwitchConfig *config, uint16_t container_port) {
 +    for (int i = 0; i < config->count; i++) {
 +        if (config->mappings[i].container_port == container_port)
 +            return i;
-     }
++    }
 +    return -1;
- }
++}
  
--bool is_localhost(struct sockaddr_storage *my_sockaddr) {
--    /** Localhost is represented differently in the two IPv families, so determining if an address's destination is localhost
--     *  must be done differently for each family. Both must also be compared to 0, which is the enumeration for INADDR_ANY
--     *  which is often used bind() calls.
--     */
--    switch(my_sockaddr->ss_family) {
+-        default:
+-            break; 
 +static uint16_t resolve_port(PortSwitchConfig *config, uint16_t original_port, int family) {
 +    if (original_port == 0)
 +        return 0;
@@ -519,21 +509,25 @@ index abcbd15..17799aa 100644
 +    int idx = find_mapping(config, original_port);
 +    if (idx >= 0) {
 +        uint16_t target = config->mappings[idx].host_port;
-+        uint16_t result = find_available_port(target, family);
-+        return result ? result : 0;
++        return find_available_port(target, family);
 +    }
 +
 +    if (config->auto_redirect && original_port < PORT_THRESHOLD) {
 +        uint16_t target = original_port + PORT_ADDITION;
-+        uint16_t result = find_available_port(target, family);
-+        return result ? result : 0;
-+    }
++        return find_available_port(target, family);
+     }
 +
 +    return 0;
-+}
+ }
  
+-bool is_localhost(struct sockaddr_storage *my_sockaddr) {
+-    /** Localhost is represented differently in the two IPv families, so determining if an address's destination is localhost
+-     *  must be done differently for each family. Both must also be compared to 0, which is the enumeration for INADDR_ANY
+-     *  which is often used bind() calls.
+-     */
 +static bool is_localhost(struct sockaddr_storage *my_sockaddr) {
-+    switch(my_sockaddr->ss_family) {
+     switch(my_sockaddr->ss_family) {
+-
          case AF_INET: {
              struct sockaddr_in *in = (struct sockaddr_in *)my_sockaddr;
 -            char ipAddress[INET_ADDRSTRLEN];
