@@ -103,7 +103,7 @@ int handle_chroot_exit_end(Tracee *tracee, Config *config, bool from_sigsys) {
 		/* Replace tracee bindings */
 		talloc_unlink(tracee, tracee->fs);
 		tracee->fs = talloc_zero(tracee, FileSystemNameSpace);
-		binding = new_binding(tracee, path_host_absolute, "/", true);
+		binding = new_binding(tracee, path_host_absolute, "/", true, BINDING_ACCESS_RW);
 		initialize_bindings(tracee);
 
 		/* Restore current dir.  */

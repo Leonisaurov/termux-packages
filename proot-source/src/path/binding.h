@@ -29,12 +29,19 @@
 #include "tracee/tracee.h"
 #include "path.h"
 
+typedef enum {
+	BINDING_ACCESS_RW = 0,
+	BINDING_ACCESS_RO,
+	BINDING_ACCESS_WO,
+} BindingAccess;
+
 typedef struct binding {
 	Path host;
 	Path guest;
 
 	bool need_substitution;
 	bool must_exist;
+	BindingAccess access_mode;
 
 	struct {
 		CIRCLEQ_ENTRY(binding) pending;
@@ -47,12 +54,13 @@ typedef CIRCLEQ_HEAD(bindings, binding) Bindings;
 
 extern Binding *insort_binding3(const Tracee *tracee, const TALLOC_CTX *context,
 				const char host_path[PATH_MAX], const char guest_path[PATH_MAX]);
-extern Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist);
+extern Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist, BindingAccess access_mode);
 extern int initialize_bindings(Tracee *tracee);
 extern const char *get_path_binding(const Tracee* tracee, Side side, const char path[PATH_MAX]);
 extern Binding *get_binding(const Tracee *tracee, Side side, const char path[PATH_MAX]);
 extern const char *get_root(const Tracee* tracee);
 extern int substitute_binding(const Tracee* tracee, Side side, char path[PATH_MAX]);
 extern void remove_binding_from_all_lists(const Tracee *tracee, Binding *binding);
+extern int check_binding_access(const Tracee *tracee, const char guest_path[PATH_MAX], bool is_write);
 
 #endif /* BINDING_H */

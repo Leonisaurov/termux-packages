@@ -42,7 +42,7 @@ static int handle_option_r(Tracee *tracee, const Cli *cli UNUSED, const char *va
 
 	/* ``chroot $PATH`` is semantically equivalent to ``mount
 	 * --bind $PATH /``.  */
-	binding = new_binding(tracee, value, "/", true);
+	binding = new_binding(tracee, value, "/", true, BINDING_ACCESS_RW);
 	if (binding == NULL)
 		return -1;
 
@@ -53,6 +53,7 @@ static int handle_option_b(Tracee *tracee, const Cli *cli UNUSED, const char *va
 {
 	char *host;
 	char *guest;
+	BindingAccess access_mode = BINDING_ACCESS_RW;
 
 	host = talloc_strdup(tracee->ctx, value);
 	if (host == NULL) {
@@ -64,9 +65,23 @@ static int handle_option_b(Tracee *tracee, const Cli *cli UNUSED, const char *va
 	if (guest != NULL) {
 		*guest = '\0';
 		guest++;
+
+		char *perm = strchr(guest, ':');
+		if (perm != NULL) {
+			*perm = '\0';
+			perm++;
+
+			if (strcmp(perm, "ro") == 0)
+				access_mode = BINDING_ACCESS_RO;
+			else if (strcmp(perm, "wo") == 0)
+				access_mode = BINDING_ACCESS_WO;
+			else if (strcmp(perm, "rw") != 0)
+				note(tracee, WARNING, USER,
+					"ignoring unknown access mode '%s' for binding", perm);
+		}
 	}
 
-	new_binding(tracee, host, guest, true);
+	new_binding(tracee, host, guest, true, access_mode);
 	return 0;
 }
 
@@ -138,8 +153,8 @@ static int handle_option_q(Tracee *tracee, const Cli *cli UNUSED, const char *va
 	} while (!last);
 	assert(i == nb_args);
 
-	new_binding(tracee, "/", HOST_ROOTFS, true);
-	new_binding(tracee, "/dev/null", "/etc/ld.so.preload", false);
+	new_binding(tracee, "/", HOST_ROOTFS, true, BINDING_ACCESS_RW);
+	new_binding(tracee, "/dev/null", "/etc/ld.so.preload", false, BINDING_ACCESS_RW);
 
 	return 0;
 }
@@ -247,7 +262,7 @@ static void new_bindings(Tracee *tracee, const char *bindings[], const char *val
 			? expand_front_variable(tracee->ctx, bindings[i])
 			: value);
 
-		new_binding(tracee, path, NULL, false);
+		new_binding(tracee, path, NULL, false, BINDING_ACCESS_RW);
 	}
 }
 

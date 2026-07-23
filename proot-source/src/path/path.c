@@ -374,6 +374,42 @@ int translate_path(Tracee *tracee, char result[PATH_MAX], int dir_fd,
 	if (status < 0)
 		return status;
 
+	/* Check binding access mode for the guest path. */
+	{
+		int sysnum = get_sysnum(tracee, CURRENT);
+		bool is_write = false;
+
+		switch (sysnum) {
+		case PR_open: case PR_creat:
+			is_write = (peek_reg(tracee, CURRENT, SYSARG_2)
+				    & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) != 0;
+			break;
+		case PR_openat:
+			is_write = (peek_reg(tracee, CURRENT, SYSARG_3)
+				    & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) != 0;
+			break;
+		case PR_truncate:
+			is_write = true;
+			break;
+		case PR_mkdir: case PR_mkdirat:
+		case PR_rmdir: case PR_unlink: case PR_unlinkat:
+		case PR_rename: case PR_renameat: case PR_renameat2:
+		case PR_symlink: case PR_symlinkat:
+		case PR_link: case PR_linkat:
+		case PR_chmod: case PR_fchmod: case PR_fchmodat:
+		case PR_chown: case PR_lchown: case PR_fchownat:
+		case PR_utimensat: case PR_mknod: case PR_mknodat:
+			is_write = true;
+			break;
+		default:
+			break;
+		}
+
+		status = check_binding_access(tracee, result, is_write);
+		if (status < 0)
+			return status;
+	}
+
 	/* Final binding substitution to convert "result" into a host
 	 * path, since canonicalize() works from the guest
 	 * point-of-view.  */

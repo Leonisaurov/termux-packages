@@ -105,11 +105,17 @@ static void print_bindings(const Tracee *tracee)
 		return;
 
 	CIRCLEQ_FOREACH_(tracee, binding, GUEST) {
+		const char *mode_str = "";
+		if (binding->access_mode == BINDING_ACCESS_RO)
+			mode_str = ":ro";
+		else if (binding->access_mode == BINDING_ACCESS_WO)
+			mode_str = ":wo";
+
 		if (compare_paths(binding->host.path, binding->guest.path) == PATHS_ARE_EQUAL)
-			note(tracee, INFO, USER, "binding = %s", binding->host.path);
+			note(tracee, INFO, USER, "binding = %s%s", binding->host.path, mode_str);
 		else
-			note(tracee, INFO, USER, "binding = %s:%s",
-				binding->host.path, binding->guest.path);
+			note(tracee, INFO, USER, "binding = %s:%s%s",
+				binding->host.path, binding->guest.path, mode_str);
 	}
 }
 
@@ -454,7 +460,7 @@ static int remove_bindings(Bindings *bindings)
  * missing @host path only if @must_exist is true.  This function
  * returns the allocated binding on success, NULL on error.
  */
-Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist)
+Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool must_exist, BindingAccess access_mode)
 {
 	Binding *binding;
 	char base[PATH_MAX];
@@ -474,6 +480,8 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 	binding = talloc_zero(tracee->ctx, Binding);
 	if (binding == NULL)
 		return NULL;
+
+	binding->access_mode = access_mode;
 
 	/* Canonicalize the host part of the binding, as expected by
 	 * get_binding().  /proc/self/... paths are special: "self" must
@@ -762,6 +770,31 @@ int initialize_bindings(Tracee *tracee)
 
 	if (tracee->verbose > 0)
 		print_bindings(tracee);
+
+	return 0;
+}
+
+/**
+ * Check whether a path access violates a binding's access mode.
+ * Returns 0 if allowed, -EROFS if writing to a RO binding,
+ * -EACCES if reading from a WO binding.
+ */
+int check_binding_access(const Tracee *tracee, const char guest_path[PATH_MAX], bool is_write)
+{
+	const Binding *binding;
+
+	if (guest_path == NULL || guest_path[0] != '/')
+		return 0;
+
+	binding = get_binding(tracee, GUEST, guest_path);
+	if (binding == NULL)
+		return 0;
+
+	if (is_write && binding->access_mode == BINDING_ACCESS_RO)
+		return -EROFS;
+
+	if (!is_write && binding->access_mode == BINDING_ACCESS_WO)
+		return -EACCES;
 
 	return 0;
 }
