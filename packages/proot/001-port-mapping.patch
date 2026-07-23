@@ -1,70 +1,8 @@
---- a/src/extension/extension.h	2026-07-21 19:16:13.544728063 -0600
-+++ b/src/extension/extension.h	2026-07-21 19:17:01.764728066 -0600
-@@ -25,10 +25,23 @@
- 
- #include <sys/queue.h> /* LIST_, */
- #include <stdint.h>    /* intptr_t, */
-+#include <stdbool.h>
-+#include <netinet/in.h> /* uint16_t, */
- 
- #include "tracee/tracee.h"
- #include "syscall/seccomp.h"
- 
-+typedef struct {
-+	uint16_t host_port;
-+	uint16_t container_port;
-+} PortMapping;
-+
-+typedef struct {
-+	PortMapping mappings[64];
-+	int count;
-+	bool auto_redirect;
-+} PortSwitchConfig;
-+
- /* List of possible events.  */
- typedef enum {
- 	/* A guest path passed as an argument of the current syscall
---- a/src/cli/proot.h	2026-07-21 19:16:13.544728063 -0600
-+++ b/src/cli/proot.h	2026-07-21 19:17:19.428728067 -0600
-@@ -69,6 +69,7 @@
- static int handle_option_L(Tracee *tracee, const Cli *cli, const char *value);
- static int handle_option_H(Tracee *tracee, const Cli *cli, const char *value);
- static int handle_option_p(Tracee *tracee, const Cli *cli, const char *value);
-+static int handle_option_port_mapping(Tracee *tracee, const Cli *cli, const char *value);
- 
- static int pre_initialize_bindings(Tracee *, const Cli *, size_t, char *const *, size_t);
- static int post_initialize_exe(Tracee *, const Cli *, size_t, char *const *);
-@@ -274,11 +275,24 @@
-         },
-         { .class = "Extension options",
-           .arguments = {
--                { .name = "-p", .separator = '\0', .value = NULL },
-+                { .name = "-p", .separator = ' ', .value = "host:container" },
-+                { .name = "--port", .separator = '=', .value = "host:container" },
-+                { .name = NULL, .separator = '\0', .value = NULL } },
-+          .handler = handle_option_port_mapping,
-+          .description = "Map host port to container port (e.g., -p 8080:80).",
-+          .detail = "\tExplicitly map a host port to a container port.\n\
-+\tMultiple -p flags can be specified.\n\
-+\tIf the host port is occupied, proot will search for the next free port.",
-+        },
-+        { .class = "Extension options",
-+          .arguments = {
-+                { .name = "--protect-privileged-ports", .separator = '\0', .value = NULL },
-                 { .name = NULL, .separator = '\0', .value = NULL } },
-           .handler = handle_option_p,
--          .description = "Modify bindings to protected ports to use a higher port number.",
--          .detail = "",
-+          .description = "Auto-redirect privileged ports (<1024) by +2000, finding free ports.",
-+          .detail = "\tAutomatically redirect bind() calls for ports below 1024\n\
-+\tby adding 2000 to the port number. If the resulting port\n\
-+\tis occupied, proot will search for the next free port.",
-         },
-         { .class = "Extension options",
-           .arguments = {
---- a/src/cli/proot.c	2026-07-21 19:16:13.544728063 -0600
-+++ b/src/cli/proot.c	2026-07-21 19:17:39.596728069 -0600
-@@ -331,9 +331,62 @@
+diff --git a/src/cli/proot.c b/src/cli/proot.c
+index eb92071..dddcaaa 100644
+--- a/src/cli/proot.c
++++ b/src/cli/proot.c
+@@ -331,9 +331,65 @@ static int handle_option_H(Tracee *tracee, const Cli *cli UNUSED, const char *va
          return 0;
  }
  
@@ -130,19 +68,87 @@
          return 0;
  }
  
---- a/src/extension/port_switch/port_switch.c	2026-07-21 19:16:13.548728063 -0600
-+++ b/src/extension/port_switch/port_switch.c	2026-07-23 00:00:00.000000000 -0600
-@@ -5,6 +5,9 @@
+diff --git a/src/cli/proot.h b/src/cli/proot.h
+index 6ec5036..108b9f2 100644
+--- a/src/cli/proot.h
++++ b/src/cli/proot.h
+@@ -69,6 +69,7 @@ static int handle_option_kill_on_exit(Tracee *tracee, const Cli *cli, const char
+ static int handle_option_L(Tracee *tracee, const Cli *cli, const char *value);
+ static int handle_option_H(Tracee *tracee, const Cli *cli, const char *value);
+ static int handle_option_p(Tracee *tracee, const Cli *cli, const char *value);
++static int handle_option_port_mapping(Tracee *tracee, const Cli *cli, const char *value);
+ 
+ static int pre_initialize_bindings(Tracee *, const Cli *, size_t, char *const *, size_t);
+ static int post_initialize_exe(Tracee *, const Cli *, size_t, char *const *, size_t);
+@@ -274,11 +275,24 @@ Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
+         },
+         { .class = "Extension options",
+           .arguments = {
+-                { .name = "-p", .separator = '\0', .value = NULL },
++                { .name = "-p", .separator = ' ', .value = "host:container" },
++                { .name = "--port", .separator = '=', .value = "host:container" },
++                { .name = NULL, .separator = '\0', .value = NULL } },
++          .handler = handle_option_port_mapping,
++          .description = "Map host port to container port (e.g., -p 8080:80).",
++          .detail = "\tExplicitly map a host port to a container port.\n\
++\tMultiple -p flags can be specified.\n\
++\tIf the host port is occupied, proot will search for the next free port.",
++        },
++        { .class = "Extension options",
++          .arguments = {
++                { .name = "--protect-privileged-ports", .separator = '\0', .value = NULL },
+                 { .name = NULL, .separator = '\0', .value = NULL } },
+           .handler = handle_option_p,
+-          .description = "Modify bindings to protected ports to use a higher port number.",
+-          .detail = "",
++          .description = "Auto-redirect privileged ports (<1024) by +2000, finding free ports.",
++          .detail = "\tAutomatically redirect bind() calls for ports below 1024\n\
++\tby adding 2000 to the port number. If the resulting port\n\
++\tis occupied, proot will search for the next free port.",
+         },
+         { .class = "Extension options",
+           .arguments = {
+diff --git a/src/extension/extension.h b/src/extension/extension.h
+index e66fe48..61350cb 100644
+--- a/src/extension/extension.h
++++ b/src/extension/extension.h
+@@ -25,10 +25,23 @@
+ 
+ #include <sys/queue.h> /* LIST_, */
+ #include <stdint.h>    /* intptr_t, */
++#include <stdbool.h>
++#include <netinet/in.h> /* uint16_t, */
+ 
+ #include "tracee/tracee.h"
+ #include "syscall/seccomp.h"
+ 
++typedef struct {
++	uint16_t host_port;
++	uint16_t container_port;
++} PortMapping;
++
++typedef struct {
++	PortMapping mappings[64];
++	int count;
++	bool auto_redirect;
++} PortSwitchConfig;
++
+ /* List of possible events.  */
+ typedef enum {
+ 	/* A guest path passed as an argument of the current syscall
+diff --git a/src/extension/port_switch/port_switch.c b/src/extension/port_switch/port_switch.c
+index abcbd15..24568ac 100644
+--- a/src/extension/port_switch/port_switch.c
++++ b/src/extension/port_switch/port_switch.c
+@@ -5,6 +5,7 @@
  #include <linux/net.h>
  #include <stdint.h>
  #include <string.h>
 +#include <unistd.h>
-+#include <sys/socket.h>
-+#include <netinet/in.h>
  
  #include "extension/extension.h"
  #include "tracee/tracee.h"
-@@ -12,22 +15,14 @@
+@@ -12,22 +13,18 @@
  
  #define PORT_THRESHOLD  1024
  #define PORT_ADDITION   2000
@@ -176,7 +182,7 @@
  
  int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t data1 UNUSED, intptr_t data2 UNUSED) {
      switch (event) {
-@@ -38,61 +33,130 @@
+@@ -38,90 +35,133 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              { PR_socketcall, FILTER_SYSEXIT },
              { PR_sendto, FILTER_SYSEXIT },
              { PR_recvfrom, FILTER_SYSEXIT },
@@ -286,21 +292,22 @@
                  int call;
                  long a[6];
                  call = peek_reg(tracee, ORIGINAL, SYSARG_1);
--                read_data(tracee, a, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(long) * 6);
+-                read_data(tracee, a, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(a));
+-                switch(call) {
 +                if (read_data(tracee, a, peek_reg(tracee, ORIGINAL, SYSARG_2), SOCKETCALL_ARGS_SIZE) <= 0)
 +                    return 0;
  
-                 switch (call) {
++                switch (call) {
                      case SYS_BIND: {
                          struct sockaddr_storage my_sockaddr;
 -                        read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
 -                        mod_port(tracee, true, true, false, &my_sockaddr, a);
 +                        if (read_data(tracee, &my_sockaddr, a[1], sizeof(my_sockaddr)) <= 0)
 +                            break;
-+
+ 
 +                        uint16_t original_port = extract_port(&my_sockaddr);
 +                        uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
- 
++
 +                        if (new_port != 0 && new_port != original_port) {
 +                            set_port(&my_sockaddr, new_port);
 +                            write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
@@ -329,7 +336,6 @@
                          break;
                      }
  
-@@ -100,8 +164,19 @@
                      case SYS_SENDTO: {
                          struct sockaddr_storage my_sockaddr;
 -                        if(a[4] != 0) {
@@ -352,7 +358,7 @@
                          }
  
                          break;
-@@ -116,98 +191,105 @@
+@@ -136,121 +176,126 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              default:
                  return 0;
          }
@@ -428,6 +434,7 @@
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), in, sizeof(in));
 -            }
 -            break;
+-        }
 +    if (family == AF_INET) {
 +        struct sockaddr_in *in = (struct sockaddr_in *)&addr;
 +        in->sin_port = htons(port);
@@ -437,20 +444,46 @@
 +        in6->sin6_port = htons(port);
 +        in6->sin6_addr = in6addr_loopback;
 +    }
-+
+ 
+-        case AF_INET6: {
+-            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)my_sockaddr;
+-            if(ntohs(in6->sin6_port) > 0 && ntohs(in6->sin6_port) < PORT_THRESHOLD) {
+-                if(is_bind) {
+-                    printf("\nATTENTION: A bind system call was requested on port: %d\n", ntohs(in6->sin6_port));
+-                    in6->sin6_port = htons(ntohs(in6->sin6_port) + PORT_ADDITION);
+-                    printf("The port has been changed. If connecting from outside Termux, use: %d\n\n", ntohs(in6->sin6_port));
+-                }
+-                else
+-                    in6->sin6_port = htons(ntohs(in6->sin6_port) + PORT_ADDITION);
+-    
+-                if(is_socketcall && is_udp) { 
+-                    write_data(tracee, socketcall_arg2[4], in6, sizeof(in6));
+-                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
+-                }
 +    socklen_t addr_len = (family == AF_INET)
 +        ? sizeof(struct sockaddr_in)
 +        : sizeof(struct sockaddr_in6);
-+
+ 
+-                else if(is_socketcall && is_udp)
+-                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), in6, sizeof(in6));
 +    bool available = false;
 +    if (bind(sock, (struct sockaddr *)&addr, addr_len) == 0) {
 +        available = (listen(sock, 1) == 0);
 +    }
-+
+ 
+-                else if(is_socketcall && !is_udp) { 
+-                    write_data(tracee, socketcall_arg2[1], in6, sizeof(in6));
+-                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
+-                }
 +    close(sock);
 +    return available;
 +}
-+
+ 
+-                else if(!is_socketcall && !is_udp)
+-                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), in6, sizeof(in6));
+-            }
+-            break;
+-        }
 +static uint16_t find_available_port(uint16_t start_port, int family) {
 +    for (uint16_t i = 0; i < MAX_PORT_SEARCH; i++) {
 +        uint16_t port = start_port + i;
@@ -461,15 +494,23 @@
 +    }
 +    return 0;
 +}
-+
+ 
+-        default:
+-            break; 
 +static int find_mapping(PortSwitchConfig *config, uint16_t container_port) {
 +    for (int i = 0; i < config->count; i++) {
 +        if (config->mappings[i].container_port == container_port)
 +            return i;
-+    }
+     }
 +    return -1;
-+}
-+
+ }
+ 
+-bool is_localhost(struct sockaddr_storage *my_sockaddr) {
+-    /** Localhost is represented differently in the two IPv families, so determining if an address's destination is localhost
+-     *  must be done differently for each family. Both must also be compared to 0, which is the enumeration for INADDR_ANY
+-     *  which is often used bind() calls.
+-     */
+-    switch(my_sockaddr->ss_family) {
 +static uint16_t resolve_port(PortSwitchConfig *config, uint16_t original_port, int family) {
 +    if (original_port == 0)
 +        return 0;
@@ -486,26 +527,41 @@
 +        uint16_t result = find_available_port(target, family);
 +        return result ? result : 0;
 +    }
-+
+ 
 +    return 0;
 +}
 +
 +static bool is_localhost(struct sockaddr_storage *my_sockaddr) {
 +    switch(my_sockaddr->ss_family) {
-+        case AF_INET: {
-+            struct sockaddr_in *in = (struct sockaddr_in *)my_sockaddr;
+         case AF_INET: {
+             struct sockaddr_in *in = (struct sockaddr_in *)my_sockaddr;
+-            char ipAddress[INET_ADDRSTRLEN];
+-            inet_ntop(AF_INET, &(in->sin_addr), ipAddress, INET_ADDRSTRLEN);
+-            if(strcmp(ipAddress, "127.0.0.1") == 0)
+-                return true;
+-            else
+-                return false;
 +            return (in->sin_addr.s_addr == htonl(INADDR_LOOPBACK) ||
 +                    in->sin_addr.s_addr == htonl(INADDR_ANY));
-+        }
-+        case AF_INET6: {
-+            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)my_sockaddr;
+         }
+-    
+         case AF_INET6: {
+             struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)my_sockaddr;
+-            char ipAddress[INET6_ADDRSTRLEN];
+-            inet_ntop(AF_INET6, &(in6->sin6_addr), ipAddress, INET6_ADDRSTRLEN);
+-            if(strcmp(ipAddress, "::1") == 0)
+-                return true;
+-            else
+-                return false;
 +            return (IN6_IS_ADDR_LOOPBACK(&in6->sin6_addr) ||
 +                    IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr));
-+        }
+         }
+-
+-        default: 
 +        default:
-+            return false;
-+    }
-+}
+             return false;
+     }
+ }
 +
 +static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
 +                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2) {
@@ -521,5 +577,3 @@
 +        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), sockaddr, sockaddr_size);
 +    }
 +}
-+
-

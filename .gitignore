@@ -19,6 +19,7 @@ scripts/*.log
 
 # Source files.
 /sources/
+/proot-source/
 
 # GitHub Actions build artifacts
 debs*
