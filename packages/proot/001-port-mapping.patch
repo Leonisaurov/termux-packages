@@ -1,8 +1,8 @@
 diff --git a/src/cli/proot.c b/src/cli/proot.c
-index eb92071..dddcaaa 100644
+index eb92071..9369d0c 100644
 --- a/src/cli/proot.c
 +++ b/src/cli/proot.c
-@@ -331,9 +331,65 @@ static int handle_option_H(Tracee *tracee, const Cli *cli UNUSED, const char *va
+@@ -331,9 +331,54 @@ static int handle_option_H(Tracee *tracee, const Cli *cli UNUSED, const char *va
          return 0;
  }
  
@@ -16,23 +16,12 @@ index eb92071..dddcaaa 100644
 +                return -1;
 +        }
 +
-+        if (host_port == 0 || container_port == 0) {
-+                note(tracee, ERROR, USER, "port numbers must be between 1 and 65535");
-+                return -1;
-+        }
-+
 +        ext = get_extension(tracee, port_switch_callback);
 +        if (ext != NULL) {
 +                PortSwitchConfig *config = talloc_get_type_abort(((Extension *)ext)->config, PortSwitchConfig);
 +                if (config->count >= 64) {
 +                        note(tracee, ERROR, USER, "too many port mappings (max 64)");
 +                        return -1;
-+                }
-+                for (int i = 0; i < config->count; i++) {
-+                        if (config->mappings[i].container_port == container_port) {
-+                                note(tracee, ERROR, USER, "container port %d is already mapped", container_port);
-+                                return -1;
-+                        }
 +                }
 +                config->mappings[config->count].host_port = host_port;
 +                config->mappings[config->count].container_port = container_port;
@@ -137,18 +126,20 @@ index e66fe48..61350cb 100644
  typedef enum {
  	/* A guest path passed as an argument of the current syscall
 diff --git a/src/extension/port_switch/port_switch.c b/src/extension/port_switch/port_switch.c
-index abcbd15..b21b6a2 100644
+index abcbd15..4863bbd 100644
 --- a/src/extension/port_switch/port_switch.c
 +++ b/src/extension/port_switch/port_switch.c
-@@ -5,6 +5,7 @@
+@@ -5,6 +5,9 @@
  #include <linux/net.h>
  #include <stdint.h>
  #include <string.h>
++#include <stdio.h>
 +#include <unistd.h>
++#include <errno.h>
  
  #include "extension/extension.h"
  #include "tracee/tracee.h"
-@@ -12,22 +13,19 @@
+@@ -12,22 +15,15 @@
  
  #define PORT_THRESHOLD  1024
  #define PORT_ADDITION   2000
@@ -170,20 +161,16 @@ index abcbd15..b21b6a2 100644
 - *  Uses my_sockaddr to hold the structure that contains the IP address. 
 - */
 -bool    is_localhost(struct sockaddr_storage *my_sockaddr);
-+static uint16_t extract_port(struct sockaddr_storage *addr);
-+static void set_port(struct sockaddr_storage *addr, uint16_t port);
 +static bool is_port_available(uint16_t port, int family);
 +static uint16_t find_available_port(uint16_t start_port, int family);
 +static int find_mapping(PortSwitchConfig *config, uint16_t container_port);
-+static uint16_t resolve_port(PortSwitchConfig *config, uint16_t original_port, int family);
-+static bool is_localhost(struct sockaddr_storage *my_sockaddr);
-+static size_t get_sockaddr_len(struct sockaddr_storage *addr);
 +static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
-+                            struct sockaddr_storage *sockaddr, long *socketcall_arg2);
++                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2);
++static bool is_localhost(struct sockaddr_storage *my_sockaddr);
  
  int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t data1 UNUSED, intptr_t data2 UNUSED) {
      switch (event) {
-@@ -38,90 +36,133 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
+@@ -38,61 +34,186 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              { PR_socketcall, FILTER_SYSEXIT },
              { PR_sendto, FILTER_SYSEXIT },
              { PR_recvfrom, FILTER_SYSEXIT },
@@ -213,45 +200,117 @@ index abcbd15..b21b6a2 100644
 -         *  to save users hassle when connecting to localhost while allowing them to reach servers outside their system
 -         *  without a difference from their regular usability.
 -         */
-+        PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
 +
          switch(get_sysnum(tracee, ORIGINAL)) {
  
              case PR_bind: {
 -                struct sockaddr_storage my_sockaddr;    
--                read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(struct sockaddr_storage));
++                struct sockaddr_storage my_sockaddr;
+                 read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(struct sockaddr_storage));
 -                mod_port(tracee, false, true, false, &my_sockaddr, NULL);
 -                
-+                struct sockaddr_storage my_sockaddr;
-+                if (read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(my_sockaddr)) <= 0)
++
++                PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
++                uint16_t original_port = 0;
++                int family = my_sockaddr.ss_family;
++
++                if (family == AF_INET) {
++                    struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                    original_port = ntohs(in->sin_port);
++                } else if (family == AF_INET6) {
++                    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                    original_port = ntohs(in6->sin6_port);
++                }
++
++                if (original_port == 0)
 +                    return 0;
 +
-+                uint16_t original_port = extract_port(&my_sockaddr);
-+                uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
++                int idx = find_mapping(config, original_port);
++                if (idx >= 0) {
++                    uint16_t target = config->mappings[idx].host_port;
++                    target = find_available_port(target, family);
 +
-+                if (new_port != 0 && new_port != original_port) {
-+                    set_port(&my_sockaddr, new_port);
-+                    write_back_port(tracee, false, false, &my_sockaddr, NULL);
++                    if (family == AF_INET) {
++                        struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                        in->sin_port = htons(target);
++                    } else if (family == AF_INET6) {
++                        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                        in6->sin6_port = htons(target);
++                    }
++
++                    printf("\nPORT MAPPING: container:%d -> host:%d\n", original_port, target);
++                    write_back_port(tracee, false, false, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                    return 0;
 +                }
++
++                if (config->auto_redirect && original_port < PORT_THRESHOLD) {
++                    uint16_t target = original_port + PORT_ADDITION;
++                    target = find_available_port(target, family);
++
++                    if (family == AF_INET) {
++                        struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                        in->sin_port = htons(target);
++                    } else if (family == AF_INET6) {
++                        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                        in6->sin6_port = htons(target);
++                    }
++
++                    printf("\nPRIVILEGED PORT: %d -> %d (auto-redirected)\n", original_port, target);
++                    write_back_port(tracee, false, false, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                }
++
                  return 0;
              }
  
              case PR_connect: {
                  struct sockaddr_storage my_sockaddr;
--                read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(struct sockaddr_storage));
+                 read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(struct sockaddr_storage));
 -                if(is_localhost(&my_sockaddr)) 
 -                    mod_port(tracee, false, false, false, &my_sockaddr, NULL);
 -                
-+                if (read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(my_sockaddr)) <= 0)
-+                    return 0;
++                if(is_localhost(&my_sockaddr)) {
++                    PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
++                    uint16_t original_port = 0;
++                    int family = my_sockaddr.ss_family;
 +
-+                if (is_localhost(&my_sockaddr)) {
-+                    uint16_t original_port = extract_port(&my_sockaddr);
-+                    uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
++                    if (family == AF_INET) {
++                        struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                        original_port = ntohs(in->sin_port);
++                    } else if (family == AF_INET6) {
++                        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                        original_port = ntohs(in6->sin6_port);
++                    }
 +
-+                    if (new_port != 0 && new_port != original_port) {
-+                        set_port(&my_sockaddr, new_port);
-+                        write_back_port(tracee, false, false, &my_sockaddr, NULL);
++                    if (original_port == 0)
++                        return 0;
++
++                    int idx = find_mapping(config, original_port);
++                    if (idx >= 0) {
++                        uint16_t target = config->mappings[idx].host_port;
++                        target = find_available_port(target, family);
++
++                        if (family == AF_INET) {
++                            struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                            in->sin_port = htons(target);
++                        } else if (family == AF_INET6) {
++                            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                            in6->sin6_port = htons(target);
++                        }
++
++                        write_back_port(tracee, false, false, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                    } else if (config->auto_redirect && original_port < PORT_THRESHOLD) {
++                        uint16_t target = original_port + PORT_ADDITION;
++                        target = find_available_port(target, family);
++
++                        if (family == AF_INET) {
++                            struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                            in->sin_port = htons(target);
++                        } else if (family == AF_INET6) {
++                            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                            in6->sin6_port = htons(target);
++                        }
++
++                        write_back_port(tracee, false, false, &my_sockaddr, sizeof(my_sockaddr), NULL);
 +                    }
 +                }
                  return 0;
@@ -264,21 +323,53 @@ index abcbd15..b21b6a2 100644
 -                 *  is used while in a connected case (non-UDP), its sockaddr argument is null. To avoid
 -                 *  modifying the port, these cases are ignored.
 -                 */
--                if(peek_reg(tracee, ORIGINAL, SYSARG_5) != 0) {
--                    read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_5), sizeof(struct sockaddr_storage));
+                 if(peek_reg(tracee, ORIGINAL, SYSARG_5) != 0) {
+                     read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_5), sizeof(struct sockaddr_storage));
 -                    if(is_localhost(&my_sockaddr)) 
 -                        mod_port(tracee, false, false, true, &my_sockaddr, NULL);
-+                if (peek_reg(tracee, ORIGINAL, SYSARG_5) != 0) {
-+                    if (read_data(tracee, &my_sockaddr, peek_reg(tracee, ORIGINAL, SYSARG_5), sizeof(my_sockaddr)) <= 0)
-+                        return 0;
++                    if(is_localhost(&my_sockaddr)) {
++                        PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
++                        uint16_t original_port = 0;
++                        int family = my_sockaddr.ss_family;
 +
-+                    if (is_localhost(&my_sockaddr)) {
-+                        uint16_t original_port = extract_port(&my_sockaddr);
-+                        uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
++                        if (family == AF_INET) {
++                            struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                            original_port = ntohs(in->sin_port);
++                        } else if (family == AF_INET6) {
++                            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                            original_port = ntohs(in6->sin6_port);
++                        }
 +
-+                        if (new_port != 0 && new_port != original_port) {
-+                            set_port(&my_sockaddr, new_port);
-+                            write_back_port(tracee, false, true, &my_sockaddr, NULL);
++                        if (original_port == 0)
++                            return 0;
++
++                        int idx = find_mapping(config, original_port);
++                        if (idx >= 0) {
++                            uint16_t target = config->mappings[idx].host_port;
++                            target = find_available_port(target, family);
++
++                            if (family == AF_INET) {
++                                struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                in->sin_port = htons(target);
++                            } else if (family == AF_INET6) {
++                                struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                in6->sin6_port = htons(target);
++                            }
++
++                            write_back_port(tracee, false, true, &my_sockaddr, sizeof(my_sockaddr), NULL);
++                        } else if (config->auto_redirect && original_port < PORT_THRESHOLD) {
++                            uint16_t target = original_port + PORT_ADDITION;
++                            target = find_available_port(target, family);
++
++                            if (family == AF_INET) {
++                                struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                in->sin_port = htons(target);
++                            } else if (family == AF_INET6) {
++                                struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                in6->sin6_port = htons(target);
++                            }
++
++                            write_back_port(tracee, false, true, &my_sockaddr, sizeof(my_sockaddr), NULL);
 +                        }
 +                    }
                  }
@@ -293,73 +384,169 @@ index abcbd15..b21b6a2 100644
                  int call;
                  long a[6];
                  call = peek_reg(tracee, ORIGINAL, SYSARG_1);
--                read_data(tracee, a, peek_reg(tracee, ORIGINAL, SYSARG_2), sizeof(a));
--                switch(call) {
-+                if (read_data(tracee, a, peek_reg(tracee, ORIGINAL, SYSARG_2), SOCKETCALL_ARGS_SIZE) <= 0)
-+                    return 0;
- 
-+                switch (call) {
+@@ -102,7 +223,52 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
                      case SYS_BIND: {
                          struct sockaddr_storage my_sockaddr;
--                        read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
+                         read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
 -                        mod_port(tracee, true, true, false, &my_sockaddr, a);
-+                        if (read_data(tracee, &my_sockaddr, a[1], sizeof(my_sockaddr)) <= 0)
-+                            break;
- 
-+                        uint16_t original_port = extract_port(&my_sockaddr);
-+                        uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
 +
-+                        if (new_port != 0 && new_port != original_port) {
-+                            set_port(&my_sockaddr, new_port);
-+                            write_back_port(tracee, true, false, &my_sockaddr, a);
++                        PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
++                        uint16_t original_port = 0;
++                        int family = my_sockaddr.ss_family;
++
++                        if (family == AF_INET) {
++                            struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                            original_port = ntohs(in->sin_port);
++                        } else if (family == AF_INET6) {
++                            struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                            original_port = ntohs(in6->sin6_port);
 +                        }
++
++                        if (original_port == 0)
++                            break;
++
++                        int idx = find_mapping(config, original_port);
++                        if (idx >= 0) {
++                            uint16_t target = config->mappings[idx].host_port;
++                            target = find_available_port(target, family);
++
++                            if (family == AF_INET) {
++                                struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                in->sin_port = htons(target);
++                            } else if (family == AF_INET6) {
++                                struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                in6->sin6_port = htons(target);
++                            }
++
++                            printf("\nPORT MAPPING: container:%d -> host:%d\n", original_port, target);
++                            write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
++                        } else if (config->auto_redirect && original_port < PORT_THRESHOLD) {
++                            uint16_t target = original_port + PORT_ADDITION;
++                            target = find_available_port(target, family);
++
++                            if (family == AF_INET) {
++                                struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                in->sin_port = htons(target);
++                            } else if (family == AF_INET6) {
++                                struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                in6->sin6_port = htons(target);
++                            }
++
++                            printf("\nPRIVILEGED PORT: %d -> %d (auto-redirected)\n", original_port, target);
++                            write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
++                        }
+ 
                          break;
                      }
- 
+@@ -110,8 +276,51 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
                      case SYS_CONNECT: {
                          struct sockaddr_storage my_sockaddr;
--                        read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
+                         read_data(tracee, &my_sockaddr, a[1], sizeof(struct sockaddr_storage));
 -                        if(is_localhost(&my_sockaddr)) 
 -                            mod_port(tracee, true, false, false, &my_sockaddr, a);
-+                        if (read_data(tracee, &my_sockaddr, a[1], sizeof(my_sockaddr)) <= 0)
-+                            break;
++                        if(is_localhost(&my_sockaddr)) {
++                            PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
++                            uint16_t original_port = 0;
++                            int family = my_sockaddr.ss_family;
 +
-+                        if (is_localhost(&my_sockaddr)) {
-+                            uint16_t original_port = extract_port(&my_sockaddr);
-+                            uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
++                            if (family == AF_INET) {
++                                struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                original_port = ntohs(in->sin_port);
++                            } else if (family == AF_INET6) {
++                                struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                original_port = ntohs(in6->sin6_port);
++                            }
 +
-+                            if (new_port != 0 && new_port != original_port) {
-+                                set_port(&my_sockaddr, new_port);
-+                                write_back_port(tracee, true, false, &my_sockaddr, a);
++                            if (original_port == 0)
++                                break;
++
++                            int idx = find_mapping(config, original_port);
++                            if (idx >= 0) {
++                                uint16_t target = config->mappings[idx].host_port;
++                                target = find_available_port(target, family);
++
++                                if (family == AF_INET) {
++                                    struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                    in->sin_port = htons(target);
++                                } else if (family == AF_INET6) {
++                                    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                    in6->sin6_port = htons(target);
++                                }
++
++                                write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
++                            } else if (config->auto_redirect && original_port < PORT_THRESHOLD) {
++                                uint16_t target = original_port + PORT_ADDITION;
++                                target = find_available_port(target, family);
++
++                                if (family == AF_INET) {
++                                    struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                    in->sin_port = htons(target);
++                                } else if (family == AF_INET6) {
++                                    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                    in6->sin6_port = htons(target);
++                                }
++
++                                write_back_port(tracee, true, false, &my_sockaddr, sizeof(my_sockaddr), a);
 +                            }
 +                        }
  
                          break;
                      }
- 
-                     case SYS_SENDTO: {
+@@ -120,8 +329,51 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
                          struct sockaddr_storage my_sockaddr;
--                        if(a[4] != 0) {
--                            read_data(tracee, &my_sockaddr, a[4], sizeof(struct sockaddr_storage));
+                         if(a[4] != 0) {
+                             read_data(tracee, &my_sockaddr, a[4], sizeof(struct sockaddr_storage));
 -                            if(is_localhost(&my_sockaddr)) 
 -                                mod_port(tracee, true, false, true, &my_sockaddr, a);
-+                        if (a[4] != 0) {
-+                            if (read_data(tracee, &my_sockaddr, a[4], sizeof(my_sockaddr)) <= 0)
-+                                break;
++                            if(is_localhost(&my_sockaddr)) {
++                                PortSwitchConfig *config = talloc_get_type_abort(extension->config, PortSwitchConfig);
++                                uint16_t original_port = 0;
++                                int family = my_sockaddr.ss_family;
 +
-+                            if (is_localhost(&my_sockaddr)) {
-+                                uint16_t original_port = extract_port(&my_sockaddr);
-+                                uint16_t new_port = resolve_port(config, original_port, my_sockaddr.ss_family);
++                                if (family == AF_INET) {
++                                    struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                    original_port = ntohs(in->sin_port);
++                                } else if (family == AF_INET6) {
++                                    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                    original_port = ntohs(in6->sin6_port);
++                                }
 +
-+                                if (new_port != 0 && new_port != original_port) {
-+                                    set_port(&my_sockaddr, new_port);
-+                                    write_back_port(tracee, true, true, &my_sockaddr, a);
++                                if (original_port == 0)
++                                    break;
++
++                                int idx = find_mapping(config, original_port);
++                                if (idx >= 0) {
++                                    uint16_t target = config->mappings[idx].host_port;
++                                    target = find_available_port(target, family);
++
++                                    if (family == AF_INET) {
++                                        struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                        in->sin_port = htons(target);
++                                    } else if (family == AF_INET6) {
++                                        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                        in6->sin6_port = htons(target);
++                                    }
++
++                                    write_back_port(tracee, true, true, &my_sockaddr, sizeof(my_sockaddr), a);
++                                } else if (config->auto_redirect && original_port < PORT_THRESHOLD) {
++                                    uint16_t target = original_port + PORT_ADDITION;
++                                    target = find_available_port(target, family);
++
++                                    if (family == AF_INET) {
++                                        struct sockaddr_in *in = (struct sockaddr_in *)&my_sockaddr;
++                                        in->sin_port = htons(target);
++                                    } else if (family == AF_INET6) {
++                                        struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&my_sockaddr;
++                                        in6->sin6_port = htons(target);
++                                    }
++
++                                    write_back_port(tracee, true, true, &my_sockaddr, sizeof(my_sockaddr), a);
 +                                }
 +                            }
                          }
  
                          break;
-@@ -136,121 +177,130 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
+@@ -136,98 +388,75 @@ int port_switch_callback(Extension *extension, ExtensionEvent event, intptr_t da
              default:
                  return 0;
          }
@@ -389,13 +576,10 @@ index abcbd15..b21b6a2 100644
 -        case AF_INET: {
 -            struct sockaddr_in *in = (struct sockaddr_in *)my_sockaddr;
 -            if(ntohs(in->sin_port) > 0 && ntohs(in->sin_port) < PORT_THRESHOLD) {
-+static uint16_t extract_port(struct sockaddr_storage *addr) {
-+    if (addr->ss_family == AF_INET)
-+        return ntohs(((struct sockaddr_in *)addr)->sin_port);
-+    else if (addr->ss_family == AF_INET6)
-+        return ntohs(((struct sockaddr_in6 *)addr)->sin6_port);
-+    return 0;
-+}
++static bool is_port_available(uint16_t port, int family) {
++    int sock = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
++    if (sock < 0)
++        return false;
  
 -                if(is_bind) {
 -                    printf("\nATTENTION: A bind system call was requested on port: %d\n", ntohs(in->sin_port));
@@ -404,21 +588,13 @@ index abcbd15..b21b6a2 100644
 -                }
 -                else
 -                   in->sin_port = htons(ntohs(in->sin_port) + PORT_ADDITION); 
-+static void set_port(struct sockaddr_storage *addr, uint16_t port) {
-+    if (addr->ss_family == AF_INET)
-+        ((struct sockaddr_in *)addr)->sin_port = htons(port);
-+    else if (addr->ss_family == AF_INET6)
-+        ((struct sockaddr_in6 *)addr)->sin6_port = htons(port);
-+}
- 
+-
 -                if(is_socketcall && is_udp) {
 -                    write_data(tracee, socketcall_arg2[4], in, sizeof(in));
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
 -                }
-+static bool is_port_available(uint16_t port, int family) {
-+    int sock = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
-+    if (sock < 0)
-+        return false;
++    int opt = 1;
++    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
  
 -                else if(!is_socketcall && is_udp)
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), in, sizeof(in));
@@ -427,9 +603,7 @@ index abcbd15..b21b6a2 100644
 -                    write_data(tracee, socketcall_arg2[1], in, sizeof(in));
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, sizeof(socketcall_arg2));
 -                }
-+    int opt = 1;
-+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
- 
+-
 -                else if(!is_socketcall && !is_udp)
 -                    write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), in, sizeof(in));
 -            }
@@ -502,83 +676,44 @@ index abcbd15..b21b6a2 100644
  
 -        default:
 -            break; 
-+static uint16_t resolve_port(PortSwitchConfig *config, uint16_t original_port, int family) {
-+    if (original_port == 0)
-+        return 0;
-+
-+    int idx = find_mapping(config, original_port);
-+    if (idx >= 0) {
-+        uint16_t target = config->mappings[idx].host_port;
-+        return find_available_port(target, family);
-+    }
-+
-+    if (config->auto_redirect && original_port < PORT_THRESHOLD) {
-+        uint16_t target = original_port + PORT_ADDITION;
-+        return find_available_port(target, family);
++static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
++                            void *sockaddr, size_t sockaddr_size, long *socketcall_arg2) {
++    if (is_socketcall && is_udp) {
++        write_data(tracee, socketcall_arg2[4], sockaddr, sockaddr_size);
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
++    } else if (!is_socketcall && is_udp) {
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), sockaddr, sockaddr_size);
++    } else if (is_socketcall && !is_udp) {
++        write_data(tracee, socketcall_arg2[1], sockaddr, sockaddr_size);
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
++    } else if (!is_socketcall && !is_udp) {
++        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), sockaddr, sockaddr_size);
      }
-+
-+    return 0;
  }
  
--bool is_localhost(struct sockaddr_storage *my_sockaddr) {
+ bool is_localhost(struct sockaddr_storage *my_sockaddr) {
 -    /** Localhost is represented differently in the two IPv families, so determining if an address's destination is localhost
 -     *  must be done differently for each family. Both must also be compared to 0, which is the enumeration for INADDR_ANY
 -     *  which is often used bind() calls.
 -     */
-+static bool is_localhost(struct sockaddr_storage *my_sockaddr) {
      switch(my_sockaddr->ss_family) {
--
+ 
          case AF_INET: {
-             struct sockaddr_in *in = (struct sockaddr_in *)my_sockaddr;
--            char ipAddress[INET_ADDRSTRLEN];
--            inet_ntop(AF_INET, &(in->sin_addr), ipAddress, INET_ADDRSTRLEN);
--            if(strcmp(ipAddress, "127.0.0.1") == 0)
--                return true;
--            else
--                return false;
-+            return (in->sin_addr.s_addr == htonl(INADDR_LOOPBACK) ||
-+                    in->sin_addr.s_addr == htonl(INADDR_ANY));
+@@ -239,7 +468,7 @@ bool is_localhost(struct sockaddr_storage *my_sockaddr) {
+             else
+                 return false;
          }
 -    
++
          case AF_INET6: {
              struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)my_sockaddr;
--            char ipAddress[INET6_ADDRSTRLEN];
--            inet_ntop(AF_INET6, &(in6->sin6_addr), ipAddress, INET6_ADDRSTRLEN);
--            if(strcmp(ipAddress, "::1") == 0)
--                return true;
--            else
--                return false;
-+            return (IN6_IS_ADDR_LOOPBACK(&in6->sin6_addr) ||
-+                    IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr));
+             char ipAddress[INET6_ADDRSTRLEN];
+@@ -250,7 +479,7 @@ bool is_localhost(struct sockaddr_storage *my_sockaddr) {
+                 return false;
          }
--
+ 
 -        default: 
 +        default:
              return false;
      }
  }
-+
-+static size_t get_sockaddr_len(struct sockaddr_storage *addr) {
-+    if (addr->ss_family == AF_INET)
-+        return sizeof(struct sockaddr_in);
-+    else if (addr->ss_family == AF_INET6)
-+        return sizeof(struct sockaddr_in6);
-+    return sizeof(struct sockaddr_storage);
-+}
-+
-+static void write_back_port(Tracee *tracee, bool is_socketcall, bool is_udp,
-+                            struct sockaddr_storage *sockaddr, long *socketcall_arg2) {
-+    size_t len = get_sockaddr_len(sockaddr);
-+
-+    if (is_socketcall && is_udp) {
-+        write_data(tracee, socketcall_arg2[4], sockaddr, len);
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
-+    } else if (!is_socketcall && is_udp) {
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_5), sockaddr, len);
-+    } else if (is_socketcall && !is_udp) {
-+        write_data(tracee, socketcall_arg2[1], sockaddr, len);
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), socketcall_arg2, SOCKETCALL_ARGS_SIZE);
-+    } else {
-+        write_data(tracee, peek_reg(tracee, CURRENT, SYSARG_2), sockaddr, len);
-+    }
-+}
