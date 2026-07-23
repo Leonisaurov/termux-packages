@@ -81,7 +81,7 @@ jobs:
 
     - name: Build proot
       run: |
-        ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 --format pacman proot
+        ./scripts/run-docker.sh ./build-package.sh -I -a aarch64 --format pacman proot
 
     - name: Collect package files
       if: always()
