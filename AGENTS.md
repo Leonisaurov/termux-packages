@@ -38,9 +38,49 @@ The source lives directly in `proot-source/` — no patches, no downloads.
 
 ### Modified Source Files
 - `proot-source/src/extension/extension.h` — `PortMapping`, `PortSwitchConfig` structs
-- `proot-source/src/cli/proot.h` — `-p`/`--port`/`--protect-privileged-ports` options
-- `proot-source/src/cli/proot.c` — option handlers with config
+- `proot-source/src/cli/proot.h` — `-p`/`--port`/`--protect-privileged-ports` options, `--mbind`
+- `proot-source/src/cli/proot.c` — option handlers with config, mbind handler
 - `proot-source/src/extension/port_switch/port_switch.c` — helper functions, syscall interception, security hardening
+- `proot-source/src/path/binding.h` — `BindingAccess`, `BindingType` enums, `Binding` struct extended
+- `proot-source/src/path/binding.c` — mbind_prepare, copy_recursive, mbind_cleanup, check_binding_access
+
+### Port Mapping
+
+1. **Explicit mapping** (`-p host:container` / `--port host:container`):
+   - Max 64 mappings, auto-finds free port if target occupied
+
+2. **Auto-redirect** (`--protect-privileged-ports`):
+   - Redirects `bind()` for ports < 1024 by +2000, finds next free port
+
+### Bind Permissions
+
+Extended `-b` syntax with optional access mode:
+- `-b /host:/guest:ro` — read-only (writes return `EROFS`)
+- `-b /host:/guest:wo` — write-only (reads return `EACCES`)
+- `-b /host:/guest:rw` — read-write (default, backward compatible)
+
+Access mode enforced in `translate_path()` after canonicalization.
+For `open`/`openat`, reads `O_WRONLY`/`O_RDWR` flags from tracee registers.
+
+### Merge Bind (`--mbind`)
+
+Copies rootfs directory contents to host before creating a regular bind.
+Files that already exist in the guest's directory are preserved.
+
+```
+proot --mbind /real/run:/run
+```
+
+- Copies `$ROOTFS/run/*` to `/real/run/` recursively
+- Aborts with `EEXIST` if a specific file from rootfs already exists at host
+- Extra host files (not in rootfs) are preserved
+- On proot exit, copied files are automatically cleaned up via talloc destructor
+
+## TODO
+
+- **Merge bind (getdents64)**: Implement true overlay-style merge bind where files from
+  both host and rootfs are visible simultaneously, not just copied. Requires intercepting
+  `getdents64` to merge directory listings (similar to hidden_files extension).
 
 ## How the Build Works
 
