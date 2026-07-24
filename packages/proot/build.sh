@@ -5,12 +5,12 @@ TERMUX_PKG_DESCRIPTION="Emulate chroot, bind mount and binfmt_misc for non-root 
 TERMUX_PKG_LICENSE="GPL-2.0"
 TERMUX_PKG_MAINTAINER="@leonisaurov"
 TERMUX_PKG_VERSION="5.1.107.86"
-TERMUX_PKG_REVISION=9
+TERMUX_PKG_REVISION=10
 TERMUX_PKG_SKIP_SRC_EXTRACT=true
-TERMUX_PKG_DEPENDS="libandroid-shmem, libtalloc"
+TERMUX_PKG_DEPENDS="libtalloc"
 TERMUX_PKG_SUGGESTS="proot-distro"
 TERMUX_PKG_BUILD_IN_SRC=true
-TERMUX_PKG_EXTRA_MAKE_ARGS="-C src PROOT_WITH_LIBANDROID_SHMEM=true"
+TERMUX_PKG_EXTRA_MAKE_ARGS="-C src"
 
 # Install loader in libexec instead of extracting it every time
 export PROOT_UNBUNDLE_LOADER=$TERMUX_PREFIX/libexec/proot
