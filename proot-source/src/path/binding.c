@@ -478,18 +478,9 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		return -errno;
 
 	if (S_ISDIR(statl.st_mode)) {
-		if (access(dst, F_OK) != 0) {
-			status = mkdir(dst, statl.st_mode & 0777);
-			if (status < 0 && errno != EEXIST)
-				return -errno;
-
-			struct mbind_entry *e = talloc(binding, struct mbind_entry);
-			if (e != NULL) {
-				strcpy(e->path, dst);
-				e->next = binding->mbind_files;
-				binding->mbind_files = e;
-			}
-		}
+		status = mkdir(dst, statl.st_mode & 0777);
+		if (status < 0 && errno != EEXIST)
+			return -errno;
 
 		dir = opendir(src);
 		if (dir == NULL)
@@ -509,11 +500,6 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 			status = join_paths(2, dst_path, dst, entry->d_name);
 			if (status < 0) { closedir(dir); return status; }
 
-			if (access(dst_path, F_OK) == 0) {
-				closedir(dir);
-				return -EEXIST;
-			}
-
 			status = copy_recursive(src_path, dst_path, binding);
 			if (status < 0) { closedir(dir); return status; }
 		}
@@ -528,6 +514,7 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 			return -errno;
 		target[len] = '\0';
 
+		unlink(dst);
 		if (symlink(target, dst) < 0)
 			return -errno;
 
@@ -547,7 +534,7 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		if (src_fd < 0)
 			return -errno;
 
-		dst_fd = open(dst, O_WRONLY | O_CREAT | O_EXCL, statl.st_mode & 0777);
+		dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, statl.st_mode & 0777);
 		if (dst_fd < 0) {
 			close(src_fd);
 			return -errno;
@@ -615,11 +602,11 @@ static int mbind_prepare(Tracee *tracee, const char *host, const char *guest, Bi
 
 	root = get_root(tracee);
 	if (root == NULL)
-		return -EINVAL;
+		return 0;
 
 	status = join_paths(2, src, root, guest);
 	if (status < 0)
-		return status;
+		return 0;
 
 	/* If the guest path doesn't exist in rootfs, nothing to copy. */
 	status = lstat(src, &statl);
