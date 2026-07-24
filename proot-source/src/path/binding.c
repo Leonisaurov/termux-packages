@@ -482,6 +482,13 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		if (status < 0 && errno != EEXIST)
 			return -errno;
 
+		struct mbind_entry *e = talloc(binding, struct mbind_entry);
+		if (e != NULL) {
+			strcpy(e->path, dst);
+			e->next = binding->mbind_files;
+			binding->mbind_files = e;
+		}
+
 		dir = opendir(src);
 		if (dir == NULL)
 			return -errno;
@@ -571,7 +578,7 @@ static int mbind_cleanup(Binding *binding)
 	struct mbind_entry *entry = binding->mbind_files;
 
 	while (entry != NULL) {
-		unlink(entry->path);
+		remove(entry->path);
 		/* Try to remove empty parent directories. */
 		char *slash = strrchr(entry->path, '/');
 		if (slash != NULL && slash != entry->path) {
@@ -712,8 +719,8 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 		talloc_set_destructor(binding, mbind_cleanup);
 		status = mbind_prepare(tracee, binding->host.path, binding->guest.path, binding);
 		if (status < 0) {
-			note(tracee, ERROR, SYSTEM, "mbind: can't prepare '%s': %s",
-				binding->host.path, strerror(-status));
+		note(tracee, ERROR, INTERNAL, "mbind: can't prepare '%s': %s",
+			binding->host.path, strerror(-status));
 			goto error;
 		}
 	}
