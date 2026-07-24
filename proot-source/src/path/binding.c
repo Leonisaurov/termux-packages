@@ -462,6 +462,26 @@ struct mbind_entry {
 };
 
 /**
+ * Track @path for cleanup if it was newly created (didn't exist before).
+ * @existed should be true if the destination already existed before we
+ * created/overwrote it.  Only newly created entries are tracked so that
+ * mbind_cleanup never removes pre-existing host files or the host
+ * directory itself.
+ */
+static void mbind_track_if_new(Binding *binding, const char *path, bool existed)
+{
+	if (existed)
+		return;
+
+	struct mbind_entry *e = talloc(binding, struct mbind_entry);
+	if (e != NULL) {
+		strcpy(e->path, path);
+		e->next = binding->mbind_files;
+		binding->mbind_files = e;
+	}
+}
+
+/**
  * Recursively copy a directory tree from @src to @dst.
  * Tracks created files in @binding->mbind_files for cleanup.
  * Returns 0 on success, -errno on error.
@@ -485,14 +505,7 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		if (status < 0 && errno != EEXIST)
 			return -errno;
 
-		if (!dst_existed) {
-			struct mbind_entry *e = talloc(binding, struct mbind_entry);
-			if (e != NULL) {
-				strcpy(e->path, dst);
-				e->next = binding->mbind_files;
-				binding->mbind_files = e;
-			}
-		}
+		mbind_track_if_new(binding, dst, dst_existed);
 
 		dir = opendir(src);
 		if (dir == NULL)
@@ -531,14 +544,7 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		if (symlink(target, dst) < 0)
 			return -errno;
 
-		if (!dst_existed) {
-			struct mbind_entry *e = talloc(binding, struct mbind_entry);
-			if (e != NULL) {
-				strcpy(e->path, dst);
-				e->next = binding->mbind_files;
-				binding->mbind_files = e;
-			}
-		}
+		mbind_track_if_new(binding, dst, dst_existed);
 	}
 	else if (S_ISREG(src_stat.st_mode)) {
 		int src_fd, dst_fd;
@@ -568,14 +574,7 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		close(src_fd);
 		close(dst_fd);
 
-		if (!dst_existed) {
-			struct mbind_entry *e = talloc(binding, struct mbind_entry);
-			if (e != NULL) {
-				strcpy(e->path, dst);
-				e->next = binding->mbind_files;
-				binding->mbind_files = e;
-			}
-		}
+		mbind_track_if_new(binding, dst, dst_existed);
 	}
 
 	return 0;
@@ -583,6 +582,13 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 
 /**
  * Talloc destructor for MBIND bindings: remove all copied files on exit.
+ *
+ * Only entries that were tracked by mbind_track_if_new() are removed —
+ * pre-existing host files and the host directory itself are never
+ * touched.  Entries are in reverse-creation order (LIFO), so children
+ * are removed before their parents.  remove() on a directory calls
+ * rmdir(), which only succeeds on empty directories — by the time we
+ * reach a tracked directory, its children have already been removed.
  */
 static int mbind_cleanup(Binding *binding)
 {
@@ -590,13 +596,6 @@ static int mbind_cleanup(Binding *binding)
 
 	while (entry != NULL) {
 		remove(entry->path);
-		/* Try to remove empty parent directories. */
-		char *slash = strrchr(entry->path, '/');
-		if (slash != NULL && slash != entry->path) {
-			*slash = '\0';
-			rmdir(entry->path);
-			*slash = '/';
-		}
 		entry = entry->next;
 	}
 	binding->mbind_files = NULL;
@@ -730,8 +729,8 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 		talloc_set_destructor(binding, mbind_cleanup);
 		status = mbind_prepare(tracee, binding->host.path, binding->guest.path, binding);
 		if (status < 0) {
-		note(tracee, ERROR, INTERNAL, "mbind: can't prepare '%s': %s",
-			binding->host.path, strerror(-status));
+			note(tracee, ERROR, INTERNAL, "mbind: can't prepare '%s': %s",
+				binding->host.path, strerror(-status));
 			goto error;
 		}
 	}
