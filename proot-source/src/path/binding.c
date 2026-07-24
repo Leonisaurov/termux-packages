@@ -468,25 +468,30 @@ struct mbind_entry {
  */
 static int copy_recursive(const char *src, const char *dst, Binding *binding)
 {
-	struct stat statl;
+	struct stat src_stat;
+	struct stat dst_stat;
 	DIR *dir;
 	struct dirent *entry;
 	int status;
 
-	status = stat(src, &statl);
+	status = lstat(src, &src_stat);
 	if (status < 0)
 		return -errno;
 
-	if (S_ISDIR(statl.st_mode)) {
-		status = mkdir(dst, statl.st_mode & 0777);
+	if (S_ISDIR(src_stat.st_mode)) {
+		bool dst_existed = (stat(dst, &dst_stat) == 0);
+
+		status = mkdir(dst, src_stat.st_mode & 0777);
 		if (status < 0 && errno != EEXIST)
 			return -errno;
 
-		struct mbind_entry *e = talloc(binding, struct mbind_entry);
-		if (e != NULL) {
-			strcpy(e->path, dst);
-			e->next = binding->mbind_files;
-			binding->mbind_files = e;
+		if (!dst_existed) {
+			struct mbind_entry *e = talloc(binding, struct mbind_entry);
+			if (e != NULL) {
+				strcpy(e->path, dst);
+				e->next = binding->mbind_files;
+				binding->mbind_files = e;
+			}
 		}
 
 		dir = opendir(src);
@@ -512,9 +517,10 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		}
 		closedir(dir);
 	}
-	else if (S_ISLNK(statl.st_mode)) {
+	else if (S_ISLNK(src_stat.st_mode)) {
 		char target[PATH_MAX];
 		ssize_t len;
+		bool dst_existed = (lstat(dst, &dst_stat) == 0);
 
 		len = readlink(src, target, sizeof(target) - 1);
 		if (len < 0)
@@ -525,23 +531,26 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		if (symlink(target, dst) < 0)
 			return -errno;
 
-		struct mbind_entry *e = talloc(binding, struct mbind_entry);
-		if (e != NULL) {
-			strcpy(e->path, dst);
-			e->next = binding->mbind_files;
-			binding->mbind_files = e;
+		if (!dst_existed) {
+			struct mbind_entry *e = talloc(binding, struct mbind_entry);
+			if (e != NULL) {
+				strcpy(e->path, dst);
+				e->next = binding->mbind_files;
+				binding->mbind_files = e;
+			}
 		}
 	}
-	else if (S_ISREG(statl.st_mode)) {
+	else if (S_ISREG(src_stat.st_mode)) {
 		int src_fd, dst_fd;
 		ssize_t nread;
 		char buf[8192];
+		bool dst_existed = (stat(dst, &dst_stat) == 0);
 
 		src_fd = open(src, O_RDONLY);
 		if (src_fd < 0)
 			return -errno;
 
-		dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, statl.st_mode & 0777);
+		dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, src_stat.st_mode & 0777);
 		if (dst_fd < 0) {
 			close(src_fd);
 			return -errno;
@@ -559,11 +568,13 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		close(src_fd);
 		close(dst_fd);
 
-		struct mbind_entry *e = talloc(binding, struct mbind_entry);
-		if (e != NULL) {
-			strcpy(e->path, dst);
-			e->next = binding->mbind_files;
-			binding->mbind_files = e;
+		if (!dst_existed) {
+			struct mbind_entry *e = talloc(binding, struct mbind_entry);
+			if (e != NULL) {
+				strcpy(e->path, dst);
+				e->next = binding->mbind_files;
+				binding->mbind_files = e;
+			}
 		}
 	}
 
