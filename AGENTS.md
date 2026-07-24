@@ -36,22 +36,6 @@ The source lives directly in `proot-source/` — no patches, no downloads.
 2. **Auto-redirect** (`--protect-privileged-ports`):
    - Redirects `bind()` for ports < 1024 by +2000, finds next free port
 
-### Modified Source Files
-- `proot-source/src/extension/extension.h` — `PortMapping`, `PortSwitchConfig` structs
-- `proot-source/src/cli/proot.h` — `-p`/`--port`/`--protect-privileged-ports` options, `--mbind`
-- `proot-source/src/cli/proot.c` — option handlers with config, mbind handler
-- `proot-source/src/extension/port_switch/port_switch.c` — helper functions, syscall interception, security hardening
-- `proot-source/src/path/binding.h` — `BindingAccess`, `BindingType` enums, `Binding` struct extended
-- `proot-source/src/path/binding.c` — mbind_prepare, copy_recursive, mbind_cleanup, check_binding_access
-
-### Port Mapping
-
-1. **Explicit mapping** (`-p host:container` / `--port host:container`):
-   - Max 64 mappings, auto-finds free port if target occupied
-
-2. **Auto-redirect** (`--protect-privileged-ports`):
-   - Redirects `bind()` for ports < 1024 by +2000, finds next free port
-
 ### Bind Permissions
 
 Extended `-b` syntax with optional access mode:
@@ -62,12 +46,13 @@ Extended `-b` syntax with optional access mode:
 Access mode enforced in `translate_path()` after canonicalization.
 For `open`/`openat`, reads `O_WRONLY`/`O_RDWR` flags from tracee registers.
 
-### Merge Bind (`--mbind`)
+### Merge Bind (`-m` / `--mbind`)
 
 Copies rootfs directory contents to host before creating a regular bind.
 Files that already exist in the guest's directory are preserved.
 
 ```
+proot -m /real/run:/run
 proot --mbind /real/run:/run
 ```
 
