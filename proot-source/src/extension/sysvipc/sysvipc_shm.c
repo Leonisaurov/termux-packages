@@ -149,6 +149,12 @@ static void sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *requ
 			fcntl(0, F_SETFL, 0);
 			fcntl(1, F_SETFL, 0);
 
+			/* Close ALL inherited fds except stdin/stdout/stderr.
+			 * This prevents leaked fds from proot (sockets, etc.)
+			 * from surviving through fork+exec into the helper. */
+			for (int fd = 3; fd < 1024; fd++)
+				close(fd);
+
 			/* Fork again to detach from proot waitpid() */
 			forked = fork();
 			if (forked == 0) {
@@ -473,7 +479,8 @@ int sysvipc_shmat_chain(Tracee *tracee, struct SysVIpcConfig *config)
 			.op = SHMHELPER_DISTRIBUTE,
 			.fd = shm->fd,
 		};
-		sysvipc_shm_send_helper_request(&request, NULL, 0);
+		char ack;
+		sysvipc_shm_send_helper_request(&request, &ack, sizeof(ack));
 
 		register_chained_syscall(tracee, PR_recvmsg, config->shmat_socket_fd, pointers.msghdr_ptr, 0, 0, 0, 0);
 		config->chain_state = CSTATE_SHMAT_RECVMSG;
@@ -805,12 +812,15 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 
 void sysvipc_shm_helper_main() {
 	char *path;
-	int socket_server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 
-	/* Close inherited file descriptors except stdin, stdout, stderr. */
-	for (int fd = 3; fd < 1024; fd++) {
-		if (fd != socket_server_fd)
-			close(fd);
+	/* Close ALL inherited file descriptors except stdin, stdout, stderr. */
+	for (int fd = 3; fd < 1024; fd++)
+		close(fd);
+
+	int socket_server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+	if (socket_server_fd < 0) {
+		perror("proot-shm-helper: socket");
+		_exit(1);
 	}
 
 	struct sockaddr_un addr = {
@@ -875,6 +885,9 @@ void sysvipc_shm_helper_main() {
 			break;
 		case SHMHELPER_DISTRIBUTE:
 		{
+			char ack = 'A';
+			write(1, &ack, 1);  /* ACK before accept() to unblock proot */
+
 			int client_fd = accept(socket_server_fd, NULL, 0);
 
 			char nothing = '!';

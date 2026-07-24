@@ -143,6 +143,28 @@ Types: `fix`, `enhance`, `chore`, `ci`
 - **`/data` mount**: Not used in CI. `-m` flag in `run-docker.sh` mounts `/data` from host which causes permission issues on GHA runners. Cache is mounted via `TERMUX_DOCKER_RUN_EXTRA_ARGS`.
 - **First CI run**: ~5 min (seeds cache). Subsequent runs: ~20-30s with cache hit.
 
+## Agent Configuration
+
+The orchestrator agent lives at `~/.config/opencode/agent/orquestador.md`.
+
+### Latest Update (2026-07-23)
+
+Overhauled the orchestrator agent based on research of 6 sources (Anthropic, CrewAI, AutoGen, LangGraph, OpenAI, Andrew Ng) and installed skills:
+- `addyosmani/agent-skills@planning-and-task-breakdown` (15.8K installs)
+- `qodex-ai/ai-agent-skills@multi-agent-orchestration` (1.9K installs)
+
+Key changes:
+- Added `read: allow` and `skill: allow` permissions (was read-only before)
+- Added explicit **Planning Phase** before delegation (read context → map deps → choose pattern)
+- Added **4 decomposition patterns**: sequential, parallel, hierarchical, vertical slicing
+- Added structured task templates with acceptance criteria + verification steps
+- Added **3-level error recovery**: retry with context → report & continue → suggest alternative
+- Added **checkpoints** between phases for large work
+- Added **7 edge case handlers** with specific actions
+- Validated with `validate-agent.sh` (0 errors, 1 warning on prompt length — accepted trade-off)
+
+Restart opencode after pulling to activate changes.
+
 ## TODO
 
 - **Merge bind (getdents64)**: Implement true overlay-style merge bind where files from
