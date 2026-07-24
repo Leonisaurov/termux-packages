@@ -290,6 +290,7 @@ static void new_bindings(Tracee *tracee, const char *bindings[], const char *val
 			: value);
 
 		new_binding(tracee, path, NULL, false, BINDING_ACCESS_RW, BINDING_TYPE_REGULAR);
+	}
 }
 
 static int handle_option_R(Tracee *tracee, const Cli *cli, const char *value)
