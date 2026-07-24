@@ -49,36 +49,35 @@ For `open`/`openat`, reads `O_WRONLY`/`O_RDWR` flags from tracee registers.
 ### Merge Bind (`-m` / `--mbind`)
 
 Copies rootfs directory contents to host before creating a regular bind.
-Files that already exist in the guest's directory are preserved.
+Files from rootfs overwrite any existing files at host.
 
 ```
 proot -m /real/run:/run
 proot --mbind /real/run:/run
 ```
 
-- Copies `$ROOTFS/run/*` to `/real/run/` recursively
-- Aborts with `EEXIST` if a specific file from rootfs already exists at host
+- Copies `$ROOTFS/run/*` to `/real/run/` recursively (so `-m` is read as "mbind")
+- Overwrites files that already exist at host (no EEXIST)
 - Extra host files (not in rootfs) are preserved
 - On proot exit, copied files are automatically cleaned up via talloc destructor
+- If `$ROOTFS/run` doesn't exist or get_root() returns NULL → skip copy, bind proceeds
 
-## TODO
-
-- **Merge bind (getdents64)**: Implement true overlay-style merge bind where files from
-  both host and rootfs are visible simultaneously, not just copied. Requires intercepting
-  `getdents64` to merge directory listings (similar to hidden_files extension).
+### Modified Source Files
+- `proot-source/src/path/binding.h` — `BindingAccess`, `BindingType` enums, `Binding` struct extended, `check_binding_access()`
+- `proot-source/src/path/binding.c` — mbind_prepare, copy_recursive, mbind_cleanup, check_binding_access, all new_binding() callers updated
+- `proot-source/src/cli/proot.h` — `-p`/`--port`/`--protect-privileged-ports`/`-m`/`--mbind` options
+- `proot-source/src/cli/proot.c` — handle_option_mbind, handle_option_b with :ro/:wo/:rw
+- `proot-source/src/extension/extension.h` — `PortMapping`, `PortSwitchConfig` structs
+- `proot-source/src/extension/port_switch/port_switch.c` — security hardening
+- `proot-source/src/path/path.c` — access mode check in translate_path()
+- `proot-source/src/extension/fake_id0/chroot.c` — updated new_binding() call
 
 ## How the Build Works
 
 1. `TERMUX_PKG_SKIP_SRC_EXTRACT=true` skips download
 2. `termux_step_pre_configure()` rsyncs `proot-source/` into build dir
-3. `make` compiles with port mapping feature built-in (no patches)
+3. `make` compiles with all features built-in (no patches)
 4. Package step creates `.pkg.tar.xz`
-
-## TODO
-
-- **Merge bind (getdents64)**: Implement true overlay-style merge bind where files from
-  both host and rootfs are visible simultaneously, not just copied. Requires intercepting
-  `getdents64` to merge directory listings (similar to hidden_files extension).
 
 ## GitHub Actions Workflow
 
@@ -92,11 +91,25 @@ proot --mbind /real/run:/run
 ### `docker_image.yml`
 - Builds/pushes `ghcr.io/leonisaurov/package-builder:latest`
 
+## Workflow Monitoring
+
+Siempre que se lance un workflow, usar `gita notify` para esperar el resultado y leer los logs:
+
+```bash
+cd /data/data/com.termux/files/home/Develop/Clones/termux-packages
+gita notify build-proot.yml 2>/dev/null | grep -E '(error|##\[error\]|mbind|Success)'
+```
+
+- Exit code 0 = éxito, 1 = falló, 2 = cancelado
+- `gita notify` bloquea hasta que el workflow termina (o retorna inmediatamente si ya terminó)
+- NO usar `timeout`
+
 ## Development
 
 1. Edit files in `proot-source/src/`
 2. Bump `TERMUX_PKG_REVISION` in `packages/proot/build.sh`
 3. Push — workflow triggers automatically
+4. Siempre verificar con `gita notify build-proot.yml`
 
 ### Commit Guidelines
 
@@ -129,3 +142,9 @@ Types: `fix`, `enhance`, `chore`, `ci`
 - **`buildorder.py`**: Patched to skip missing deps when building a specific package (not full build). This is needed because some remaining packages (libllvm, python) declare dependencies on packages we removed.
 - **`/data` mount**: Not used in CI. `-m` flag in `run-docker.sh` mounts `/data` from host which causes permission issues on GHA runners. Cache is mounted via `TERMUX_DOCKER_RUN_EXTRA_ARGS`.
 - **First CI run**: ~5 min (seeds cache). Subsequent runs: ~20-30s with cache hit.
+
+## TODO
+
+- **Merge bind (getdents64)**: Implement true overlay-style merge bind where files from
+  both host and rootfs are visible simultaneously, not just copied. Requires intercepting
+  `getdents64` to merge directory listings (similar to hidden_files extension).
