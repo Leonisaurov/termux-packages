@@ -108,8 +108,7 @@ static int handle_option_mbind(Tracee *tracee, const Cli *cli UNUSED, const char
 		return -1;
 	}
 
-	if (new_binding(tracee, host, guest, true, BINDING_ACCESS_RW, BINDING_TYPE_MBIND) == NULL)
-		return -1;
+	new_binding(tracee, host, guest, true, BINDING_ACCESS_RW, BINDING_TYPE_MBIND);
 	return 0;
 }
 

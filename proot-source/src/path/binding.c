@@ -508,8 +508,11 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		mbind_track_if_new(binding, dst, dst_existed);
 
 		dir = opendir(src);
-		if (dir == NULL)
+		if (dir == NULL) {
+			if (errno == EACCES || errno == EPERM)
+				return 0;
 			return -errno;
+		}
 
 		while ((entry = readdir(dir)) != NULL) {
 			char src_path[PATH_MAX];
@@ -553,8 +556,11 @@ static int copy_recursive(const char *src, const char *dst, Binding *binding)
 		bool dst_existed = (stat(dst, &dst_stat) == 0);
 
 		src_fd = open(src, O_RDONLY);
-		if (src_fd < 0)
+		if (src_fd < 0) {
+			if (errno == EACCES || errno == EPERM)
+				return 0;
 			return -errno;
+		}
 
 		dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, src_stat.st_mode & 0777);
 		if (dst_fd < 0) {
@@ -729,7 +735,7 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 		talloc_set_destructor(binding, mbind_cleanup);
 		status = mbind_prepare(tracee, binding->host.path, binding->guest.path, binding);
 		if (status < 0) {
-			note(tracee, ERROR, INTERNAL, "mbind: can't prepare '%s': %s",
+			note(tracee, WARNING, INTERNAL, "mbind: can't prepare '%s': %s",
 				binding->host.path, strerror(-status));
 			goto error;
 		}
