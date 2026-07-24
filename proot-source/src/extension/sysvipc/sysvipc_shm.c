@@ -806,6 +806,13 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 void sysvipc_shm_helper_main() {
 	char *path;
 	int socket_server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+
+	/* Close inherited file descriptors except stdin, stdout, stderr. */
+	for (int fd = 3; fd < 1024; fd++) {
+		if (fd != socket_server_fd)
+			close(fd);
+	}
+
 	struct sockaddr_un addr = {
 		.sun_family = AF_UNIX
 	};
