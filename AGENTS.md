@@ -74,6 +74,12 @@ proot --mbind /real/run:/run
 3. `make` compiles with port mapping feature built-in (no patches)
 4. Package step creates `.pkg.tar.xz`
 
+## TODO
+
+- **Merge bind (getdents64)**: Implement true overlay-style merge bind where files from
+  both host and rootfs are visible simultaneously, not just copied. Requires intercepting
+  `getdents64` to merge directory listings (similar to hidden_files extension).
+
 ## GitHub Actions Workflow
 
 ### `build-proot.yml`
