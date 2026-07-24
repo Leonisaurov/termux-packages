@@ -456,11 +456,17 @@ static int remove_bindings(Bindings *bindings)
 	return 0;
 }
 
+struct mbind_entry {
+	struct mbind_entry *next;
+	char path[PATH_MAX];
+};
+
 /**
  * Recursively copy a directory tree from @src to @dst.
+ * Tracks created files in @binding->mbind_files for cleanup.
  * Returns 0 on success, -errno on error.
  */
-static int copy_recursive(const char *src, const char *dst)
+static int copy_recursive(const char *src, const char *dst, Binding *binding)
 {
 	struct stat statl;
 	DIR *dir;
@@ -472,9 +478,18 @@ static int copy_recursive(const char *src, const char *dst)
 		return -errno;
 
 	if (S_ISDIR(statl.st_mode)) {
-		status = mkdir(dst, statl.st_mode & 0777);
-		if (status < 0 && errno != EEXIST)
-			return -errno;
+		if (access(dst, F_OK) != 0) {
+			status = mkdir(dst, statl.st_mode & 0777);
+			if (status < 0 && errno != EEXIST)
+				return -errno;
+
+			struct mbind_entry *e = talloc(binding, struct mbind_entry);
+			if (e != NULL) {
+				strcpy(e->path, dst);
+				e->next = binding->mbind_files;
+				binding->mbind_files = e;
+			}
+		}
 
 		dir = opendir(src);
 		if (dir == NULL)
@@ -494,10 +509,12 @@ static int copy_recursive(const char *src, const char *dst)
 			status = join_paths(2, dst_path, dst, entry->d_name);
 			if (status < 0) { closedir(dir); return status; }
 
-			if (access(dst_path, F_OK) == 0)
+			if (access(dst_path, F_OK) == 0) {
+				closedir(dir);
 				return -EEXIST;
+			}
 
-			status = copy_recursive(src_path, dst_path);
+			status = copy_recursive(src_path, dst_path, binding);
 			if (status < 0) { closedir(dir); return status; }
 		}
 		closedir(dir);
@@ -506,9 +523,6 @@ static int copy_recursive(const char *src, const char *dst)
 		char target[PATH_MAX];
 		ssize_t len;
 
-		if (access(dst, F_OK) == 0)
-			return -EEXIST;
-
 		len = readlink(src, target, sizeof(target) - 1);
 		if (len < 0)
 			return -errno;
@@ -516,14 +530,18 @@ static int copy_recursive(const char *src, const char *dst)
 
 		if (symlink(target, dst) < 0)
 			return -errno;
+
+		struct mbind_entry *e = talloc(binding, struct mbind_entry);
+		if (e != NULL) {
+			strcpy(e->path, dst);
+			e->next = binding->mbind_files;
+			binding->mbind_files = e;
+		}
 	}
 	else if (S_ISREG(statl.st_mode)) {
 		int src_fd, dst_fd;
 		ssize_t nread;
 		char buf[8192];
-
-		if (access(dst, F_OK) == 0)
-			return -EEXIST;
 
 		src_fd = open(src, O_RDONLY);
 		if (src_fd < 0)
@@ -546,8 +564,37 @@ static int copy_recursive(const char *src, const char *dst)
 
 		close(src_fd);
 		close(dst_fd);
+
+		struct mbind_entry *e = talloc(binding, struct mbind_entry);
+		if (e != NULL) {
+			strcpy(e->path, dst);
+			e->next = binding->mbind_files;
+			binding->mbind_files = e;
+		}
 	}
 
+	return 0;
+}
+
+/**
+ * Talloc destructor for MBIND bindings: remove all copied files on exit.
+ */
+static int mbind_cleanup(Binding *binding)
+{
+	struct mbind_entry *entry = binding->mbind_files;
+
+	while (entry != NULL) {
+		unlink(entry->path);
+		/* Try to remove empty parent directories. */
+		char *slash = strrchr(entry->path, '/');
+		if (slash != NULL && slash != entry->path) {
+			*slash = '\0';
+			rmdir(entry->path);
+			*slash = '/';
+		}
+		entry = entry->next;
+	}
+	binding->mbind_files = NULL;
 	return 0;
 }
 
@@ -559,7 +606,7 @@ static int copy_recursive(const char *src, const char *dst)
  *
  * Returns 0 on success, -errno on error.
  */
-static int mbind_prepare(Tracee *tracee, const char *host, const char *guest)
+static int mbind_prepare(Tracee *tracee, const char *host, const char *guest, Binding *binding)
 {
 	const char *root;
 	char src[PATH_MAX];
@@ -582,7 +629,7 @@ static int mbind_prepare(Tracee *tracee, const char *host, const char *guest)
 	if (!S_ISDIR(statl.st_mode))
 		return -ENOTDIR;
 
-	status = copy_recursive(src, host);
+	status = copy_recursive(src, host, binding);
 	if (status < 0)
 		return status;
 
@@ -674,7 +721,9 @@ Binding *new_binding(Tracee *tracee, const char *host, const char *guest, bool m
 	/* For MBIND type, copy the original rootfs contents to the
 	 * host path before creating the binding.  */
 	if (type == BINDING_TYPE_MBIND) {
-		status = mbind_prepare(tracee, binding->host.path, binding->guest.path);
+		binding->mbind_files = NULL;
+		talloc_set_destructor(binding, mbind_cleanup);
+		status = mbind_prepare(tracee, binding->host.path, binding->guest.path, binding);
 		if (status < 0) {
 			note(tracee, ERROR, SYSTEM, "mbind: can't prepare '%s': %s",
 				binding->host.path, strerror(-status));

@@ -49,6 +49,8 @@ typedef struct binding {
 	BindingAccess access_mode;
 	BindingType type;
 
+	void *mbind_files;
+
 	struct {
 		CIRCLEQ_ENTRY(binding) pending;
 		CIRCLEQ_ENTRY(binding) guest;
